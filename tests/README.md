@@ -23,7 +23,7 @@ Supported declaration examples:
 ```Ocean
 func main() {}
 func add(a, b int) int { return a + b; }
-func split(text string) (string head, tail) { return; }
+func split(text string) (head, tail string) { return; }
 func log(prefix string, values ...string) {}
 func identity[T any](value T) T { return value; }
 func pair[T, U any](first T, second U) (T, U) { return first, second; }
@@ -31,7 +31,7 @@ func constrained[T ~int | ~string](value T) T { return value; }
 ```
 
 Value parameters put names before types (`a, b int`); grouped names share a type.
-Named results retain type-first syntax. Method receivers use name-before-type syntax.
+Named results and method receivers use name-before-type syntax.
 Extern declarations use C ordering: `extern int write(i32 fd, buffer<i8>[] data, int count);` or
 `extern void done(void);`. Parameter names are optional; `()` and `(void)`
 both denote no parameters. A trailing `...` is accepted after fixed parameters.
@@ -43,9 +43,11 @@ allows an immediately following closing brace.
 The AST stores type/constraint tokens for subsequent type resolution. Inline struct/interface bodies, generic argument lists, and array dimensions
 are grammar-validated before their token spans are retained. Struct fields use
 name-before-type declarations (`x, y int`); interfaces accept method signatures, embedded types,
-and union constraints. Dimensions accept integer literals, qualified names,
-parentheses, unary operators, and binary operators. Ambiguous suffixes such as
-`T[N]` remain unresolved until type checking. The parser does not evaluate array
+and union constraints. Every type modifier is a prefix (`[]T`, `[N]T`, `*T`);
+an array dimension is any non-assignment expression, and a buffer size
+(`buffer<T, n>`) is an additive or multiplicative expression. Postfix spellings
+(`T[]`, `T*`, `buffer<T>[N]`) are rejected with the prefix spelling, and
+`ocean fix` rewrites them. Dimensions remain unresolved until type checking. The parser does not evaluate array
 lengths, perform semantic type checking, verify return arity/types, or instantiate
 generics. The function-type spelling `func() int` is an unnamed function type
 returning `int`. Use `callback func() ()` for a named parameter whose function
@@ -137,35 +139,24 @@ condition-only switch, as in `switch (prepare();) { ... }`. Binding resolution,
 assertion validity, and type-case compatibility remain semantic analysis.
 Ocean requires explicit statement separators and does not insert semicolons.
 
-## Struct indexing and the name `index`
+## The name `index`
 
-`index` is scanned as an identifier. It may name variables, parameters, fields,
-functions, or range bindings, but cannot name a type or type parameter. In a
-struct body it introduces indexing delegation in either form:
-
-```Ocean
-struct Values { index data []int; }
-struct Matrix { underlying T[height][width]; index underlying; }
-```
-
-The AST's `stmt_struct.indexField` identifies the delegated field; EOF_TOKEN
-means no field was designated. A separate directive can precede the field
-it names. The two-identifier form `index data;` is reserved for a delegation
-directive. The parser validates uniqueness and field existence; the type checker
-must validate that the target can be indexed. The expression `self[]` accesses the delegated collection, while `self[i]`
-accesses an element. Both bracketed and angle-bracket parameters are accepted.
+`index` is an ordinary identifier. It may name variables, parameters, fields,
+functions, range bindings, types, and type parameters. Structs cannot be
+indexed, and `x[]` (an index with no expression) is reported as the removed
+postfix array syntax.
 
 ## Casts
 
-Use `expression->Type` for a single-token type. Parentheses are required around
-multi-token targets:
+Use `expression->Type` for a single-token type, `buffer<T, n>`, or an array
+type such as `[n]T`. Parentheses are required around other multi-token targets:
 
 ```Ocean
 number->int8;
-ptr->(string*);
-funcPtr->(string()*);
-funcPtr->((int, float)(int)*);
-ptr->(pkg.Type*);
+ptr->(*string);
+funcPtr->(*string());
+funcPtr->(*(int, float)(int));
+ptr->(*pkg.Type);
 ```
 
 The outer parentheses delimit the target and are excluded from its AST token
@@ -274,7 +265,7 @@ and `typeParamConstraints`; each constraint is a complete token span, excluding
 parameter separators. Struct constraints now use `typeTokens` rather than the
 old unused single-token `typeParamInterfaces` field.
 
-Fields, indexing delegation, embedded interfaces, and method signatures may
+Fields, embedded interfaces, and method signatures may
 reference parameters. Binding those references and enforcing constraints remain
 semantic work. Angle parameters place each constraint directly after its parameter names,
 for example `struct Pair<T, U any> { first T; second U; }`. Nested type
@@ -285,20 +276,20 @@ arguments such as `Box<Box<int>>` are accepted without changing shift tokens.
 An optional value-parameter list follows the struct name and any type parameters:
 
 ```Ocean
-struct Matrix[T any](u64 width, height) {
-    index underlying T[height][width];
+struct Matrix<T any>(width, height u64) {
+    underlying [width][height]T;
 }
 
-struct Buffer(u64 capacity) {
-    data byte[capacity];
+struct Buffer(capacity u64) {
+    data [capacity]u8;
 }
 ```
 
 Struct value parameters accept name-before-type declarations (`size int`, `height, width int`).
-Legacy type-before-name declarations (`int size`) remain accepted. Grouped names share a type;
-trailing commas and empty lists are accepted. Each parameter must have a name.
+Grouped names share a type. Trailing commas and empty lists are accepted.
+Each parameter must have a name.
 Duplicate names, collisions with type parameters, blank/unnamed parameters,
-variadics, and default values are rejected. `index` remains a valid value name.
+variadics, and default values are rejected.
 
 The complete `fieldNames`/`fieldTypes` arrays start with value parameters, in
 parameter declaration order, followed by body fields. `nFields` includes this
@@ -339,7 +330,7 @@ The CTest suite now contains:
 - `function_parser_test`: function signatures and malformed declarations.
 - `parser_features_test`: language features, AST structure, recovery, and truncation.
 - `parser_extensions_test`: angle/anonymous generics, standalone instantiation,
-  delegated collection access, switch initializers/type switches, function types,
+  switch initializers/type switches, function types,
   explicit semicolons, malformed declarations, recovery, and token prefixes.
 - `parser_edges_test`: unary/compound operators, float AST values, ternary
   associativity, if initializers/else branches, loop modes, branch labels,
@@ -447,7 +438,7 @@ call bounds, unsized parameter mutation, inferred backing storage, pointer
 aliases, C pointer interoperability, and stack restoration on block exit,
 `break`, and `continue`. Buffers carry no runtime length metadata.
 
-Built-in array tests verify `T[]`/`T[count]`, runtime counts, zero-length arrays,
+Built-in array tests verify `[]T`/`[count]T`, runtime counts, zero-length arrays,
 inline `int size` followed by payload bytes (including a native memory comparison),
 `.size`/`.data` access, `len()` derived from bytes, scalar element widths, nested
 arrays, arrays of fixed buffers, aliasing, function calls, stack restoration,
@@ -467,7 +458,7 @@ unchanged array metadata. Struct parameter tests verify prefix order, canonical
 AST views, initialization, read-only mutations/addresses, and mutable payloads.
 
 Variadic array tests verify that parameters use the same native pointer-to-inline
-array representation as `T[]` (including a native byte comparison), without a
+array representation as `[]T` (including a native byte comparison), without a
 private pointer/length view. They cover explicit items plus expansion, reference
 sharing versus concatenation copies, zero-item packs, ordinary array parameters,
 nested element types, single evaluation, normal array data assignment, caller
@@ -475,7 +466,7 @@ stack lifetime, and bounds diagnostics in variadic callees.
 
 Contextual literal tests cover array/buffer/struct destinations, inference in
 nonempty declarations, nested fields and elements, multiple assignment, fixed
-buffer padding, and explicit `T[]{...}` / `buffer<T>{...}` prefixes. Function
+buffer padding, and explicit `[]T{...}` / `buffer<T>{...}` prefixes. Function
 arguments and return values require explicit prefixes. Untyped call/return
 literals, ambiguous empty inference, scalar destinations, mismatched elements,
 and invalid keys are rejected. Native literal tests also verify single evaluation,
@@ -512,14 +503,14 @@ func (n *Node<T>) set(value T) { n.value = value; }
 `T` is declared by the receiver and inherits the corresponding struct parameter's
 constraint. Receiver bindings are positional and may be renamed, as in
 `func (n *Node<E>) get() E { return n.value; }`. Angle and square generic lists,
-value receivers, and prefix or suffix pointers are accepted. The receiver must
+value receivers, and prefix pointers are accepted. The receiver must
 name a struct, and its parameter count must match that struct. Each argument
 must be a distinct fresh type parameter name, rather than a concrete or nested
 type. Receiver bindings are scoped to the method signature and body.
 
 Method-specific parameters can be declared separately (`set<U any>`), but cannot
 redeclare a receiver binding. Receiver variables and ordinary parameters cannot
-reuse a receiver type parameter's name. Named results still use type-first syntax.
+reuse a receiver type parameter's name.
 Constraint spans are inherited from the struct; constraint satisfaction remains
 part of the compiler's unfinished generic semantics.
 
@@ -582,7 +573,7 @@ builds, with expected sizes obtained from the host ABI.
 
 `array_values_test.py` verifies runtime-sized array value semantics at `-O0` and
 `-O2`, including independent callee-stack copies, assignments, nested arrays,
-structs, value/pointer receivers, explicit `*T[]` sharing, argument snapshots,
+structs, value/pointer receivers, explicit `*[]T` sharing, argument snapshots,
 variadics, generic functions, caller-frame returns, and lexical scope lifetimes.
 It inspects the indirect parameter ABI and tests direct, mutual, and generic
 recursion returning arrays, nested arrays, and structs containing arrays. Recursive
@@ -664,14 +655,14 @@ nested arrays, strings, structs, fixed-buffer elements, pointer elements, and
 `io_backend_test.py` exercises the IO library fixture at O0/O2: printing,
 format substitutions and escapes, signed integer boundaries, float rounding,
 `i16`/`f32` arithmetic and C varargs, value switches and fallthrough, homogeneous
-`any[]` arrays, mixed `...any` packs, array-family switches, and diagnostics.
+`[]any` arrays, mixed `...any` packs, array-family switches, and diagnostics.
 Boolean and fixed/runtime array formatting checks include empty, nested, mixed,
 and `.array()` values. Struct formatting checks cover `{key: value}` output,
 empty and generic structs, nested fields and arrays, and format substitutions.
 The suite supplies its own trusted `reflect` fixture through `OCEAN_SRC`. The fixture mirrors `../ocean-src/io/io.oc` so the suite
 is self-contained.
 
-`mixed_arrays_test.py` checks `mixed any[]`, homogeneous and mixed named-interface
+`mixed_arrays_test.py` checks `mixed []any`, homogeneous and mixed named-interface
 arrays, empty-interface equivalence, method signatures and pointer method sets,
 embedded interfaces and unions, generic receiver substitutions, array casts and
 type switches, variadic packs, recursive copies, and runtime conformance checks.
@@ -696,7 +687,7 @@ lengths, sized buffer/array casts, dynamic array mutation, independent nested co
 `make`, `new`, `free`, recreation after free, immutable strings, and dependent
 struct array fields. Parameterized array fields currently use indirect storage;
 this suite tests their language behavior rather than asserting an inline ABI.
-Earlier references to the old `T[]` inline payload layout describe the legacy
+Earlier references to the old `[]T` inline payload layout describe the legacy
 implementation; dynamic arrays now use length/capacity/data headers and heap payloads.
 
 

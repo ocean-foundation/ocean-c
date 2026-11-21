@@ -188,7 +188,7 @@ if "saved" in record and os.environ.get("OCEAN_CACHE_TEST_FAIL"):
             return 0;
         }'''
     source.write_text(application); build_delta(3); built()
-    source.write_text(application.replace('func main()', 'struct Unrelated { words string[]; } func main()'))
+    source.write_text(application.replace('func main()', 'struct Unrelated { words []string; } func main()'))
     build_delta(2); built()
     other = project / 'another'; other.mkdir(); (other / 'other.oc').write_text('package another; func Value() int { return 0; }')
     source.write_text(application.replace('import "example.com/project/dependency";',

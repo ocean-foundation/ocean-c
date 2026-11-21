@@ -959,18 +959,14 @@ static Kind constraintKind(Backend *b, typeTokens span) {
     typeTokens mapKey, mapValue;
     if (mapTypeParts(span, &mapKey, &mapValue)) return type(b, span);
     typeTokens element, dimension;
-    if (bufferTypeParts(span, &element, &dimension) &&
-        span.tokens[span.nTokens - 1].type == GREATER_THAN)
+    if (bufferTypeParts(span, &element, &dimension) && !dimension.nTokens)
         return constraintShape(b, 9, constraintKind(b, element), 0);
     if (unsizedArrayTypeParts(span, &element))
         return constraintShape(b, 16, constraintKind(b, element), 0);
     Kind child;
     int shape = -1;
     size_t count = 0;
-    if (span.nTokens > 1 && span.tokens[span.nTokens - 1].type == STAR) {
-        element = (typeTokens){span.nTokens - 1, span.tokens};
-        shape = 6;
-    } else if (span.nTokens && span.tokens[0].type == STAR) {
+    if (span.nTokens && span.tokens[0].type == STAR) {
         element = (typeTokens){span.nTokens - 1, span.tokens + 1};
         shape = 6;
     } else if (arrayElementType(span, &element)) shape = 4;
@@ -1096,8 +1092,8 @@ static Kind type(Backend *b, typeTokens t) {
         return mapKind(b, key, item, key == SCALAR_ANY ? constraintKind(b, mapKey) : VOID,
                        item == SCALAR_ANY ? constraintKind(b, mapValue) : VOID);
     }
-    if (t.nTokens > 1 && t.tokens[t.nTokens - 1].type == STAR)
-        return pointerKind(b, type(b, (typeTokens){t.nTokens - 1, t.tokens}));
+    if (t.tokens[0].type == STAR)
+        return pointerKind(b, type(b, (typeTokens){t.nTokens - 1, t.tokens + 1}));
     typeTokens arrayElement;
     if (arrayElementType(t, &arrayElement)) {
         Kind element = type(b, arrayElement);
@@ -1123,7 +1119,7 @@ static Kind type(Backend *b, typeTokens t) {
         typeTokens element;
         typeTokens dimension;
         if (!bufferTypeParts(t, &element, &dimension) || bufferDimensionKind(dimension) < 0) {
-            fail(b, "expected buffer<T>[size] with a positive size, or buffer<T>[]");
+            fail(b, "expected buffer<T, size> with a positive size, or buffer<T>");
             return BAD;
         }
         Kind k = type(b, element);
@@ -1603,6 +1599,10 @@ static void clearScope(Scope *s) {
 }
 static int unsignedInteger(Backend *b, Kind k) { k = representationKind(b, k); return k == UINT || k == U32 || k == U16 || k == U8; }
 static int integral(Backend *b, Kind k) { k = representationKind(b, k); return k == INT || k == I32 || k == I16 || k == I8 || unsignedInteger(b, k); }
+static BufferKind *typedPointer(Backend *b, Kind kind) {
+    BufferKind *type = bufferKind(b, representationKind(b, kind));
+    return type && type->shape == 6 ? type : NULL;
+}
 static int floating(Backend *b, Kind k) { k = representationKind(b, k); return k == FLOAT || k == F32; }
 static int integerWidth(Backend *b, Kind k) { k = representationKind(b, k); return (k == I8 || k == U8) ? 8 : (k == I16 || k == U16) ? 16 : (k == I32 || k == U32) ? 32 : 64; }
 // Mixed-width arithmetic uses 64-bit storage. Prefer signed storage when it
@@ -2232,10 +2232,11 @@ static Kind expressionKind(Backend *b, expr *e) {
     case EXPR_TYPE_INSTANTIATION: return specializedClosureValue(b, e, 1).kind;
     case EXPR_TYPE_FUNCTION: return closureKind(b, e->underlying);
     case EXPR_TYPE_LITERAL: {
-        enum literalType t = ((struct expr_literal *)e->underlying)->type;
-        if (t == LITERAL_TYPE_NULL) return NULL_VALUE;
-        if (t == LITERAL_TYPE_INT && ((struct expr_literal *)e->underlying)->unsignedLiteral) return UINT;
-        return t == LITERAL_TYPE_STRING ? stringKind(b) : t == LITERAL_TYPE_FLOAT ? FLOAT : INT;
+        struct expr_literal *literal = e->underlying;
+        if (literal->type == LITERAL_TYPE_NULL) return NULL_VALUE;
+        if (literal->type == LITERAL_TYPE_INT && literal->unsignedLiteral) return UINT;
+        if (literal->type == LITERAL_TYPE_FLOAT) return literal->singlePrecision ? F32 : FLOAT;
+        return literal->type == LITERAL_TYPE_STRING ? stringKind(b) : INT;
     }
     case EXPR_TYPE_COMPOSITE: {
         struct expr_composite *v = e->underlying;
@@ -2354,6 +2355,8 @@ static Kind expressionKind(Backend *b, expr *e) {
         }
         if (v->operation == EXPR_ASSIGNMENT || v->operation >= EXPR_ADD_EQUALS)
             return a;
+        if (v->operation == EXPR_ADD && integral(b, a) && typedPointer(b, c)) return c;
+        if (v->operation == EXPR_SUBTRACT && typedPointer(b, a) && a == c) return INT;
         if (a == SCALAR_ANY || c == SCALAR_ANY)
             return v->checkedResult.nTokens ? type(b, v->checkedResult) : SCALAR_ANY;
         return a == FLOAT || c == FLOAT ? FLOAT : a == F32 || c == F32 ? F32
@@ -3111,7 +3114,7 @@ static ValueList tryAssertValues(Backend *b, struct expr_assertion *v) {
     return (ValueList){items, 2};
 }
 static ValueList evaluateValues(Backend *b, expr *items, size_t count, Kind *expected,
-                                size_t nExpected, int snapshot) {
+                                size_t nExpected, int snapshot, int declaration) {
     if (count == 1 && items[0].type == EXPR_TYPE_INDEX &&
         ((struct expr_index *)items[0].underlying)->tryIndex)
         return tryIndexValues(b, items[0].underlying);
@@ -3120,7 +3123,10 @@ static ValueList evaluateValues(Backend *b, expr *items, size_t count, Kind *exp
         return tryAssertValues(b, items[0].underlying);
     ValueList result = {.items = checked(sizeof(Value) * (count + 1)), .count = count};
     for (size_t i = 0; i < count; i++) {
-        Value v = expectedValue(b, &items[i], i < nExpected ? expected[i] : BAD);
+        Kind target = i < nExpected ? expected[i] : BAD;
+        Value v = declaration && typedPointer(b, target) && integral(b, expressionKind(b, &items[i]))
+            ? convert(b, expression(b, &items[i]), target)
+            : expectedValue(b, &items[i], target);
         BufferKind *t = bufferKind(b, v.kind);
         if (t && t->shape == 2) {
             if (count != 1) {
@@ -4027,6 +4033,27 @@ static Value binary(Backend *b, enum binaryExprType op, Value a, Value c) {
         if (a.kind == NULL_VALUE) a = coerce(b, a, c.kind);
         else c = coerce(b, c, a.kind);
     }
+    if (op == EXPR_ADD && integral(b, a.kind) && typedPointer(b, c.kind))
+        return binary(b, op, c, a);
+    BufferKind *pointer = typedPointer(b, a.kind);
+    if (pointer && (op == EXPR_ADD || op == EXPR_SUBTRACT)) {
+        const char *pointee = irType(b, pointer->element);
+        requirePointer(b, a);
+        if (op == EXPR_SUBTRACT && a.kind == c.kind) {
+            requirePointer(b, c);
+            Value left = convert(b, a, INT), right = convert(b, c, INT);
+            Value distance = binary(b, EXPR_SUBTRACT, left, right);
+            Value stride = value(b, INT, "ptrtoint (ptr getelementptr (%s, ptr null, i64 1) to i64)", pointee);
+            return binary(b, EXPR_DIVIDE, distance, stride);
+        }
+        Value offset = convert(b, c, INT);
+        if (op == EXPR_SUBTRACT)
+            offset = binary(b, EXPR_SUBTRACT, value(b, INT, "0"), offset);
+        Value result = temp(b, a.kind);
+        fprintf(b->body, "  %s = getelementptr %s, ptr %s, i64 %s\n", result.operand, pointee,
+                a.operand, offset.operand);
+        return result;
+    }
     if (op == EXPR_EQUALITY || op == EXPR_NOT_EQUALS) {
         if (implicitVoidPointer(b, c.kind, a.kind)) c = coerce(b, c, a.kind);
         else if (implicitVoidPointer(b, a.kind, c.kind)) a = coerce(b, a, c.kind);
@@ -4266,7 +4293,7 @@ static Value expressionImpl(Backend *b, expr *e) {
                 double d;
                 unsigned long long bits;
             } f = {.d = *(double *)v->value};
-            return value(b, FLOAT, "0x%016llX", f.bits);
+            return value(b, v->singlePrecision ? F32 : FLOAT, "0x%016llX", f.bits);
         }
         if (v->type == LITERAL_TYPE_STRING) {
             Value result = allocateCollection(b, stringKind(b), value(b, INT, "%zu", v->stringLength));
@@ -4683,7 +4710,7 @@ static Value expressionImpl(Backend *b, expr *e) {
             if (v->spread && i + 1 == v->nParams)
                 expected[i] = BAD;
         }
-        ValueList evaluated = evaluateValues(b, v->params, v->nParams, expected, v->nParams, 1);
+        ValueList evaluated = evaluateValues(b, v->params, v->nParams, expected, v->nParams, 1, 0);
         free(expected);
         if ((!f->isVariadic && evaluated.count != fixed) || evaluated.count < fixed ||
             (v->spread && (!f->isVariadic || evaluated.count < f->nParams + (f->isExtern ? 1 : 0) ||
@@ -4900,7 +4927,7 @@ static Value expressionImpl(Backend *b, expr *e) {
             }
             for (size_t i = 0; i < m; i++)
                 rhs[i] = *commaItem(&v->right, i);
-            ValueList values = evaluateValues(b, rhs, m, expected, n, 1);
+            ValueList values = evaluateValues(b, rhs, m, expected, n, 1, 0);
             if (values.count != n)
                 fail(b, "assignment count mismatch");
             for (size_t i = 0; i < n && i < values.count; i++)
@@ -4933,7 +4960,9 @@ static Value expressionImpl(Backend *b, expr *e) {
                                                rhs, spread ? arrayLength(b, rhs) : value(b, INT, "0"), spread, 0);
             }
             if (arrayAdd) old = copyValue(b, old, 0);
-            Value r = arrayAdd ? expression(b, &v->right) : expectedValue(b, &v->right, addr.kind);
+            int pointerUpdate = typedPointer(b, addr.kind) && v->operation != EXPR_ASSIGNMENT;
+            Value r = arrayAdd || pointerUpdate ? expression(b, &v->right)
+                                                : expectedValue(b, &v->right, addr.kind);
             if (v->operation != EXPR_ASSIGNMENT) {
                 enum binaryExprType ops[] = {
                     EXPR_ADD,         EXPR_SUBTRACT,  EXPR_MULTIPLY,      EXPR_DIVIDE,
@@ -5007,7 +5036,9 @@ static Value expressionImpl(Backend *b, expr *e) {
                 Value updated = boxedUnary(b,v->operation,old,v->operandTypes); store(b,addr,updated);
                 return v->operation == UNARY_POSTFIX_INCREMENT || v->operation == UNARY_POSTFIX_DECREMENT ? old : updated;
             }
-            Value one = floating(b, old.kind) ? value(b, old.kind, "0x3FF0000000000000") : value(b, old.kind, "1");
+            Value one = typedPointer(b, old.kind) ? value(b, INT, "1")
+                : floating(b, old.kind) ? value(b, old.kind, "0x3FF0000000000000")
+                                        : value(b, old.kind, "1");
             Value r = binary(b, decrement ? EXPR_SUBTRACT : EXPR_ADD, old, one);
             store(b, addr, r);
             return v->operation == UNARY_POSTFIX_INCREMENT ||
@@ -5509,7 +5540,7 @@ static void statementImpl(Backend *b, stmt *s) {
         Kind *expected = checked(sizeof(Kind) * v->nVars);
         for (size_t i = 0; i < v->nVars; i++)
             expected[i] = v->type.nTokens ? type(b, v->type) : BAD;
-        ValueList values = evaluateValues(b, v->initValues, v->nInitValues, expected, v->nVars, 1);
+        ValueList values = evaluateValues(b, v->initValues, v->nInitValues, expected, v->nVars, 1, 1);
         free(expected);
         if (v->nInitValues && values.count != v->nVars) {
             fail(b, "initializer count mismatch");
@@ -5565,7 +5596,7 @@ static void statementImpl(Backend *b, stmt *s) {
         for (size_t i = 0; i < b->function->nResults; i++)
             expected[i] = type(b, b->function->resultTypes[i]);
         ValueList values =
-            evaluateValues(b, v->values, v->nValues, expected, b->function->nResults, v->nValues > 1);
+            evaluateValues(b, v->values, v->nValues, expected, b->function->nResults, v->nValues > 1, 0);
         Value r = value(b, VOID, "");
         if (b->function->nResults > 1) {
             r = value(b, k, "zeroinitializer");
@@ -6361,7 +6392,7 @@ static void emitGlobals(Backend *b, FILE *output) {
             Kind *expected = checked(sizeof(Kind) * v->nVars);
             for (size_t j = 0; j < v->nVars; j++)
                 expected[j] = v->vars[j].type == UNDERSCORE ? BAD : find(b, v->vars[j].lexeme).kind;
-            ValueList values = evaluateValues(b, v->initValues, v->nInitValues, expected, v->nVars, 1);
+            ValueList values = evaluateValues(b, v->initValues, v->nInitValues, expected, v->nVars, 1, 1);
             for (size_t j = 0; j < v->nVars && j < values.count; j++)
                 if (v->vars[j].type != UNDERSCORE) store(b, find(b, v->vars[j].lexeme), values.items[j]);
             free(expected); free(values.items);

@@ -1,14 +1,14 @@
 package main;
 
 // A pointer lets this function mutate the caller's owned array.
-func fill(values *int[]) {
+func fill(values *[]int) {
     for (i := 0; i < len(*values); i++) {
         (*values)[i] = i + 1;
     }
 }
 
 func main() int {
-    arr: int[] = int[5];
+    arr: []int = [5]int;
     arr.data = {9, 8};
     fill(&arr);
     if (len(arr) != 5) { return 1; }

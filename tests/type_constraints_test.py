@@ -35,50 +35,50 @@ with tempfile.TemporaryDirectory(prefix="ocean constraints ") as directory:
     # Concrete string and mutable byte-array cases must agree with assertions.
     program('''func stringFirst(x any) int { switch (v := x.(type)) {
         case string: return v == "abc" ? 1 : 90;
-        case i8[]: return v[0]->int; default: return 91;
+        case []i8: return v[0]->int; default: return 91;
     } }
     func bytesFirst(x any) int { switch (v := x.(type)) {
-        case i8[]: return v[0]->int;
+        case []i8: return v[0]->int;
         case string: return v == "abc" ? 1 : 92; default: return 93;
     } }
     func nested(x any) int { switch (v := x.(type)) {
-        case string[]: return len(v[0]);
-        case i8[][]: return v[0][0]->int; default: return 94;
+        case []string: return len(v[0]);
+        case [][]i8: return v[0][0]->int; default: return 94;
     } }
     func main() int {
-        return stringFirst("abc") + stringFirst(i8[]{2}) +
-            bytesFirst("abc") + bytesFirst(i8[]{3}) +
-            nested(string[]{"abc"}) + nested(i8[][]{{4}});
+        return stringFirst("abc") + stringFirst([]i8{2}) +
+            bytesFirst("abc") + bytesFirst([]i8{3}) +
+            nested([]string{"abc"}) + nested([][]i8{{4}});
     }''', 14)
 
     # Built-in buffers follow the same bare/specialized constraint rules as structs.
     program("func classify(x any) int { switch (x.(type)) { case buffer: return 2; default: return 1; } } "
-            "func main() int { a := buffer<int>[2]{1, 2}; b := buffer<bool>[1]{true}; "
-            "view: buffer<int>[] = a; n := 3; runtime: buffer<int>[n]; "
-            "return classify(a) + classify(b) + classify(view) + classify(runtime) + classify(int[]{1}) + classify(3); }", 10)
+            "func main() int { a := buffer<int, 2>{1, 2}; b := buffer<bool, 1>{true}; "
+            "view: buffer<int> = a; n := 3; runtime: buffer<int, n>; "
+            "return classify(a) + classify(b) + classify(view) + classify(runtime) + classify([]int{1}) + classify(3); }", 10)
     program("func read(x buffer) int { switch (item := x.(type)) { "
             "case buffer<int>: return item[0]; case buffer<i8>: return item[0] -> int; "
             "case buffer: return 2; default: return 99; } } "
-            "func main() int { small := buffer<int>[1]{3}; big := buffer<int>[2]{4, 5}; "
-            "byte := buffer<i8>[1]{6}; flags := buffer<bool>[1]{true}; view: buffer<int>[] = big; "
+            "func main() int { small := buffer<int, 1>{3}; big := buffer<int, 2>{4, 5}; "
+            "byte := buffer<i8, 1>{6}; flags := buffer<bool, 1>{true}; view: buffer<int> = big; "
             "return read(small) + read(big) + read(byte) + read(flags) + read(view); }", 19)
     program("func read(x any) int { switch (item := x.(type)) { "
-            "case buffer<int>[2]: return item[1]; case buffer<int>: return item[0]; default: return 9; } } "
-            "func main() int { return read(buffer<int>[2]{1, 3}) + read(buffer<int>[1]{4}); }", 7)
+            "case buffer<int, 2>: return item[1]; case buffer<int>: return item[0]; default: return 9; } } "
+            "func main() int { return read(buffer<int, 2>{1, 3}) + read(buffer<int, 1>{4}); }", 7)
     program("func read<T buffer<int>>(x T) int { return x[0]; } "
             "func isBuffer<T buffer>(x T) int { switch (x.(type)) { case buffer: return 2; default: return 9; } } "
-            "func main() int { return read<buffer<int>[1]>(buffer<int>[1]{4}) + "
-            "isBuffer<buffer<bool>[2]>(buffer<bool>[2]{true, false}); }", 6)
+            "func main() int { return read<buffer<int, 1>>(buffer<int, 1>{4}) + "
+            "isBuffer<buffer<bool, 2>>(buffer<bool, 2>{true, false}); }", 6)
     program("struct Box<T> { value T; } func classify(x any) int { "
             "switch (x.(type)) { case Box<buffer>: return 3; default: return 1; } } "
-            "func main() int { return classify(Box<buffer<int>[1]>{{4}}) + classify(Box<int>{4}); }", 4)
+            "func main() int { return classify(Box<buffer<int, 1>>{{4}}) + classify(Box<int>{4}); }", 4)
     program("func read(x buffer) int { switch (y := x.(type)) { case buffer: "
             "switch (z := y.(type)) { case ~buffer<int>: z[0] = 7; return z[0]; default: return 1; } } return 2; } "
-            "func main() int { x := buffer<int>[1]{4}; result := read(x); return result + x[0]; }", 11)
-    program("func classify(x any) int { switch (x.(type)) { case buffer[]: return 3; default: return 1; } } "
-            "func main() int { a := buffer<int>[2][]{{1, 2}}; return classify(a) + classify(int[]{1}); }", 4)
+            "func main() int { x := buffer<int, 1>{4}; result := read(x); return result + x[0]; }", 11)
+    program("func classify(x any) int { switch (x.(type)) { case []buffer: return 3; default: return 1; } } "
+            "func main() int { a := []buffer<int, 2>{{1, 2}}; return classify(a) + classify([]int{1}); }", 4)
     rejected("func f<T buffer>(x T) {} func main() { f<int>(1); }", "constraint")
-    rejected("func f<T buffer<int>>(x T) {} func main() { f<buffer<bool>[1]>(buffer<bool>[1]{true}); }", "constraint")
+    rejected("func f<T buffer<int>>(x T) {} func main() { f<buffer<bool, 1>>(buffer<bool, 1>{true}); }", "constraint")
     rejected("func f(x buffer) int { return x[0]; }", "narrow buffer")
     rejected("func main() { x := zero(buffer); }", "concrete buffer element type")
     rejected("func f(x buffer<>) {}", "Expected type argument")
@@ -87,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix="ocean constraints ") as directory:
     program(box + "func classify(x Box) int { switch (item := x.(type)) { "
             "case Box<int>: return item.value; case Box: return 2; default: return 3; } } "
             "func main() int { return classify(Box<int>{7}) + classify(Box<bool>{true}); }", 9)
-    program("struct Sized<T>(int size) { value T; } func inspect(x Sized) int { "
+    program("struct Sized<T>(size int) { value T; } func inspect(x Sized) int { "
             "switch (item := x.(type)) { case Sized<int>: return item.size; default: return 1; } } "
             "func main() int { return inspect(Sized<int>{4, 2}) + inspect(Sized<int>{7, 3}); }", 11)
     # Family matching is nominal and the first match wins, even over a later exact case.
@@ -98,9 +98,9 @@ with tempfile.TemporaryDirectory(prefix="ocean constraints ") as directory:
             "case Box<Box>: return 3; case Box<int>: return item.value; default: return 9; } } "
             "func main() int { return classify(Box<Box<bool>>{{true}}) + classify(Box<int>{4}); }", 7)
     program(box + "struct Other<T> { value T; } func classify(x any) int { "
-            "switch (x.(type)) { case *Box: return 3; case Box[]: return 4; default: return 1; } } "
+            "switch (x.(type)) { case *Box: return 3; case []Box: return 4; default: return 1; } } "
             "func main() int { a := Box<int>{2}; b := Other<int>{2}; "
-            "xs := Box<bool>[]{{true}}; return classify(&a) + classify(&b) + classify(xs); }", 8)
+            "xs := []Box<bool>{{true}}; return classify(&a) + classify(&b) + classify(xs); }", 8)
     program("func classify(x any) int { switch (item := x.(type)) { case bool: "
             "if (item) return 3; return 1; case i8: return item -> int; case int: return item; "
             "default: return 9; } } func main() int { return classify(true) + classify(4->i8) + classify(5); }", 12)
@@ -141,7 +141,7 @@ with tempfile.TemporaryDirectory(prefix="ocean constraints ") as directory:
     rejected(box + "struct Wrapper<T Box<int>> { value T; } func main() { w: Wrapper<Box<bool>>; }", "constraint")
     rejected(box + "func use(x Box) int { return x.value; }", "narrow")
     rejected("func main() { x := 1; switch (x.(type)) { case Missing: break; } }", "unresolved type")
-    rejected(box + "func main() { x := Box<int>{1}; switch (x.(type)) { case Box<int>(4): break; } }", "Expected function signature type")
+    rejected(box + "func main() { x := Box<int>{1}; switch (x.(type)) { case Box<int>(4): break; } }", "Expected colon after switch case")
 
     # Contextual conversion accepts literal syntax, never arbitrary int values.
     program("""
@@ -176,12 +176,54 @@ with tempfile.TemporaryDirectory(prefix="ocean constraints ") as directory:
             equal := 5.0;
             if (!(n == equal && equal == n && n <= equal && equal >= n)) return 6;
             if (!isFloat(n * x) || !isFloat(x * n) || !isFloat((n + 1) / x)) return 7;
-            y: f32 = 2.0;
+            y: f32 = 2.0->f32;
             if (!isF32(n * y) || !isF32(y * n) || n / y != 2.5) return 8;
             small: i8 = -3; unsigned: u32 = 4294967295;
             if (small * x != -6.0 || unsigned + x != 4294967297.0) return 9;
             x += n; x -= n; x *= n; x /= n;
             if (x != 2.0 || !isFloat(n / x) || !isFloat(x / n)) return 10;
+            return 0;
+        }
+    """, 0)
+    narrowing = "narrowing floating-point conversion requires an explicit -> cast"
+    rejected("func main() { n := 1.5; x: f32 = n; }", narrowing)
+    rejected("func main() { x: f32; y: f64 = 1.5; x = y; }", narrowing)
+    rejected("func take(x f32) {} func main() { n := 1.5; take(n); }", narrowing)
+    rejected("func narrow(x f64) f32 { return x; } func main() {}", narrowing)
+    rejected("func main() { x: f32; n := 1.5; x += n; }", narrowing)
+    rejected("struct Sample { x f32; } func main() { n := 1.5; s := Sample{n}; }", narrowing)
+    rejected("type Single = f32; func main() { n := 1.5; x: Single = n; }", narrowing)
+    rejected("func main() { n := 1.5; values := []f32{n}; }", narrowing)
+    rejected("func main() { x: f32 = 1e39; }", "floating-point literal is out of range for f32")
+    program("""
+        type Single = f32;
+        struct Sample { x f32; }
+        func narrow(x f64) f32 { return x->f32; }
+        func widen(x f32) f64 {
+            f32 := 2;
+            x += 1;
+            return x + f32 - 3;
+        }
+        func echo(x f32) f32 { return x; }
+        func literal() f32 { return -1.5; }
+        func main() int {
+            x: f32 = 1.5;
+            y: i8 = -2;
+            z: u32 = 531;
+            if (x != widen(narrow(1.5)) || y != -2 || z != 531) return 1;
+            x = -1.5;
+            if (x != echo(-1.5) || x != literal()) return 2;
+            x += 1.5;
+            if (x != 0.0) return 3;
+            aliased: Single = 1.5;
+            sample := Sample{1.5};
+            values := []f32{1.5};
+            if (aliased != sample.x || values[0] != sample.x) return 4;
+            rounded: f32 = 1.0000000596046447753906250000000001;
+            if (rounded != 1.00000011920928955078125->f32) return 5;
+            binary: f32 = 0b1.000000000000000000000001000000000000000000000000000000001;
+            octal: f32 = 0o1.4;
+            if (binary != rounded || octal != echo(1.5)) return 6;
             return 0;
         }
     """, 0)

@@ -1,0 +1,26 @@
+# Ocean Dark - derived from ocean-foundation/ocean-c editors/helix/themes/ocean-dark.toml
+# Import into Rex via Settings -> Themes -> Import Theme File
+
+palette = 0=#0d182b
+palette = 1=#d8736b
+palette = 2=#83a271
+palette = 3=#d58d52
+palette = 4=#7db0e6
+palette = 5=#ab8fba
+palette = 6=#27babf
+palette = 7=#c2ccd6
+palette = 8=#2b3e59
+palette = 9=#e58d86
+palette = 10=#9ab889
+palette = 11=#e3a46e
+palette = 12=#79b8ff
+palette = 13=#a8acdf
+palette = 14=#8bbfca
+palette = 15=#e8eff9
+
+background = #081120
+foreground = #c2ccd6
+cursor-color = #79b8ff
+cursor-text = #081120
+selection-background = #22395c
+selection-foreground = #e8eff9

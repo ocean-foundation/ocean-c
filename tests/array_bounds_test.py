@@ -61,68 +61,68 @@ with tempfile.TemporaryDirectory(prefix="ocean bounds ") as directory:
         assert reports[0] == reports[1], reports
         checks += 1
 
-    failure("\nfunc leaf(a int[], i int) int {\n    return a[i];\n}\n"
-            "func middle(a int[]) int {\n    return leaf(a, 3);\n}\n"
-            "func main() int {\n    a := int[3];\n    return middle(a);\n}\n",
+    failure("\nfunc leaf(a []int, i int) int {\n    return a[i];\n}\n"
+            "func middle(a []int) int {\n    return leaf(a, 3);\n}\n"
+            "func main() int {\n    a := [3]int;\n    return middle(a);\n}\n",
             3, 3, "return a[i]", "a[i]", ["leaf", "middle", "main"])
-    failure("func main() int { a := int[2]; return a[-1]; }", -1, 2,
+    failure("func main() int { a := [2]int; return a[-1]; }", -1, 2,
             "return", "a[-1]", ["main"])
-    failure("func main() int { a := int[0]; return a[0]; }", 0, 0,
+    failure("func main() int { a := [0]int; return a[0]; }", 0, 0,
             "return", "a[0]", ["main"])
-    failure('extern i32 puts(buffer<i8>[] s);\nfunc main() { a := int[1]; a[1] = extern.puts("must not execute\\0".data); }',
+    failure('extern i32 puts(buffer<i8> s);\nfunc main() { a := [1]int; a[1] = extern.puts("must not execute\\0".data); }',
             1, 1, "must not execute", "a[1]", ["main"])
-    failure("func main() { a := int[2]; a[2]++; }", 2, 2,
+    failure("func main() { a := [2]int; a[2]++; }", 2, 2,
             "a[2]++", "a[2]", ["main"])
-    failure("func main() { a := i32[1]; a[1] += 2; }", 1, 1,
+    failure("func main() { a := [1]i32; a[1] += 2; }", 1, 1,
             "a[1]", "a[1]", ["main"])
-    failure("func main() int {\n    a: int[][] = int[][1];\n    a[0] = int[2];\n    return a[0][2];\n}",
+    failure("func main() int {\n    a: [][]int = [1][]int;\n    a[0] = [2]int;\n    return a[0][2];\n}",
             2, 2, "return", "[2]", ["main"])
-    failure("func main() int { a: int[][] = int[][1]; return a[1][0]; }", 1, 1,
+    failure("func main() int { a: [][]int = [1][]int; return a[1][0]; }", 1, 1,
             "return", "a[1]", ["main"])
-    failure("func recur(a int[], n int) int { if (n == 0) { return a[4]; } return recur(a, n - 1); }\n"
-            "func main() int { a := int[2]; return recur(a, 3); }", 4, 2,
+    failure("func recur(a []int, n int) int { if (n == 0) { return a[4]; } return recur(a, n - 1); }\n"
+            "func main() int { a := [2]int; return recur(a, 3); }", 4, 2,
             "return a[4]", "a[4]", ["recur", "recur", "recur", "recur", "main"])
-    failure("\r\nfunc main() int {\r\n\ta := int[1];\r\n\treturn a[2];\r\n}\r\n", 2, 1,
+    failure("\r\nfunc main() int {\r\n\ta := [1]int;\r\n\treturn a[2];\r\n}\r\n", 2, 1,
             "return", "a[2]", ["main"])
-    failure("func main() int {\n    a := int[1];\n    return a[\n        2\n    ];\n}", 2, 1,
+    failure("func main() int {\n    a := [1]int;\n    return a[\n        2\n    ];\n}", 2, 1,
             "return a[", "a[", ["main"])
-    failure("func done() {} func main() int { done(); a := int[1]; return a[3]; }", 3, 1,
+    failure("func done() {} func main() int { done(); a := [1]int; return a[3]; }", 3, 1,
             "return a[3]", "a[3]", ["main"])
-    failure("func main() int { a := int[1]; b := int[2]; return a[(a = b, 1)]; }", 1, 1,
+    failure("func main() int { a := [1]int; b := [2]int; return a[(a = b, 1)]; }", 1, 1,
             "return", "a[(", ["main"])
 
-    failure("extern i32 dprintf(i32 fd, buffer<i8>[] format, ...); extern void exit(i32 code);\n"
-            "func main() int { a := int[1]; return a[1]; }", 1, 1,
+    failure("extern i32 dprintf(i32 fd, buffer<i8> format, ...); extern void exit(i32 code);\n"
+            "func main() int { a := [1]int; return a[1]; }", 1, 1,
             "return", "a[1]", ["main"])
 
-    failure("func fill(a int[]) {\n    a.data = {1, 2, 3};\n}\nfunc main() { a := int[2]; fill(a); }", 3, 2,
+    failure("func fill(a []int) {\n    a.data = {1, 2, 3};\n}\nfunc main() { a := [2]int; fill(a); }", 3, 2,
             "a.data", "data", ["fill", "main"], message="Array data literal too large: literal length 3 exceeds array length 2")
-    failure("func main() { a := string[0]; a.data = {\"x\"}; }", 1, 0,
+    failure("func main() { a := [0]string; a.data = {\"x\"}; }", 1, 0,
             "a.data", "data", ["main"], message="Array data literal too large: literal length 1 exceeds array length 0")
-    failure('extern i32 puts(buffer<i8>[] s); func item() int { extern.puts("must not run\\0".data); return 1; }\nfunc main() { a := int[1]; a.data = {item(), 2}; }', 2, 1,
+    failure('extern i32 puts(buffer<i8> s); func item() int { extern.puts("must not run\\0".data); return 1; }\nfunc main() { a := [1]int; a.data = {item(), 2}; }', 2, 1,
             "a.data", "data", ["main"], message="Array data literal too large: literal length 2 exceeds array length 1")
 
     failure('func main() int { s := "abc"; return s[3]; }', 3, 3,
             "return", "s[3]", ["main"])
     failure('func main() int { s := "a" + "b"; return s[-1]; }', -1, 2,
             "return", "s[-1]", ["main"])
-    failure('func main() { s: i8[] = {97, 98, 99}; s.data = {1, 2, 3, 4}; }', 4, 3,
+    failure('func main() { s: []i8 = {97, 98, 99}; s.data = {1, 2, 3, 4}; }', 4, 3,
             "s.data", "data", ["main"], message="Array data literal too large: literal length 4 exceeds array length 3")
 
     failure("func read(xs ...int) int { return xs[0]; }\nfunc main() int { return read(); }", 0, 0,
             "return xs[0]", "xs[0]", ["read", "main"])
-    failure("func read(xs ...int) int { return xs[2]; }\nfunc main() int { a := int[2]; return read(a...); }", 2, 2,
+    failure("func read(xs ...int) int { return xs[2]; }\nfunc main() int { a := [2]int; return read(a...); }", 2, 2,
             "return xs[2]", "xs[2]", ["read", "main"])
-    failure("func fill(xs ...int) { xs.data = {1, 2}; }\nfunc main() { a := int[1]; fill(a...); }", 2, 1,
+    failure("func fill(xs ...int) { xs.data = {1, 2}; }\nfunc main() { a := [1]int; fill(a...); }", 2, 1,
             "xs.data", "data", ["fill", "main"], message="Array data literal too large: literal length 2 exceeds array length 1")
 
-    failure("func main() int { return zero(int[])[0]; }", 0, 0,
+    failure("func main() int { return zero([]int)[0]; }", 0, 0,
             "return", ")[0]", ["main"])
-    failure("func first<T>(values T[]) T { return values[0]; }\n"
-            "func main() int { return first<int>(zero(int[])); }", 0, 0,
+    failure("func first<T>(values []T) T { return values[0]; }\n"
+            "func main() int { return first<int>(zero([]int)); }", 0, 0,
             "return values[0]", "values[0]", ["first", "main"])
 
-    failure("func main() int { return int[]{1, 2}[2]; }", 2, 2,
+    failure("func main() int { return []int{1, 2}[2]; }", 2, 2,
             "return", "[2]", ["main"])
 
 print(f"{checks} array runtime diagnostic checks passed in native and optimized IR builds")

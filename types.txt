@@ -1,18 +1,22 @@
 Collection types
 
-Arrays: T[n] and array<T>
+Every type modifier is a prefix of the type it modifies: []T, [n]T, *T,
+mixed []I. The removed postfix spellings (T[], T[n], T*) are errors, and
+`ocean fix` rewrites them.
+
+Arrays: [n]T and array<T>
 
 An array is a value with a fixed element count. Every array begins with an
 immutable int size field, followed by its element data. size measures the data
 in BYTES, excluding the size field, padding before the data, and any private
 compiler bookkeeping. It is not the element count.
 
-For example, an int[3] has size == 3 * sizeof(int), and len(array) == 3.
+For example, a [3]int has size == 3 * sizeof(int), and len(array) == 3.
 The conceptual layout is:
 
     struct arr<T>(size int) {
         // Conceptual payload: size / sizeof(T) elements, not size elements.
-        data T[size / sizeof(T)];
+        data [size / sizeof(T)]T;
     }
 
 The backend stores constant-length arrays as a size header plus inline element
@@ -23,30 +27,30 @@ Empty structs occupy one padding byte, so an array of empty structs still has
 a recoverable length. Array elements remain mutable. The size field cannot be assigned, incremented,
 or exposed through a mutable address. An array value cannot grow in place.
 
-Instantiate arrays using T[n], with a nonnegative element count:
+Instantiate arrays using [n]T, with a nonnegative element count:
 
-    fixed: int[3] = {1, 2, 3};
-    other := int[2]{4, 5};
-    counted := int[...]{1, 2, 3}; // int[3], counted from the initializer
-    empty: int[0] = {};
+    fixed: [3]int = {1, 2, 3};
+    other := [2]int{4, 5};
+    counted := [...]int{1, 2, 3}; // [3]int, counted from the initializer
+    empty: [0]int = {};
     n := 4;
-    runtime: int[n];
+    runtime: [n]int;
 
 An untyped composite literal defaults to a static array: a := {1, 2, 3}
-infers int[3]. An explicit type or assignment destination, such as int[] or
-buffer<int>[3], takes precedence. Empty untyped literals require a destination type. T[...]{...} infers the
-length from the number of initializer entries, including zero for T[...]{}.
+infers [3]int. An explicit type or assignment destination, such as []int or
+buffer<int, 3>, takes precedence. Empty untyped literals require a destination type. [...]T{...} infers the
+length from the number of initializer entries, including zero for [...]T{}.
 The [...] suffix requires a literal body.
 
 An omitted initializer zero-initializes the elements. Array literals may supply
 fewer than n elements; the rest are zero-initialized. Too many elements fail.
-For compatibility, T[n] without a literal body in an expression still constructs
-a dynamic array. Use a declaration x: T[n] or a literal T[n]{...} for an array.
+For compatibility, [n]T without a literal body in an expression still constructs
+a dynamic array. Use a declaration x: [n]T or a literal [n]T{...} for an array.
 
-T[n] keeps its length in the type when n is a compile-time constant. Existing
+[n]T keeps its length in the type when n is a compile-time constant. Existing
 fixed-length parameter and return signatures remain valid:
 
-    func fixedCopy(a int[3]) int[3] { return a; }
+    func fixedCopy(a [3]int) [3]int { return a; }
 
 array<T> denotes an array of T with its length erased from the static type.
 It accepts any length, including zero. It is valid in variable declarations
@@ -54,14 +58,14 @@ initialized from existing arrays, function parameters, and return types:
 
     func copy(a array<int>) array<int> { return a; }
     func create(n int) array<int> {
-        result: int[n];
+        result: [n]int;
         return result;
     }
-    result := copy(int[3]{1, 2, 3});
+    result := copy([3]int{1, 2, 3});
     another: array<int> = create(5);
 
 array<T> is not constructor syntax. array<T>{...}, an uninitialized array<T>
-variable, zero(array<T>), and new(array<T>) are rejected. Instantiate with T[n]
+variable, zero(array<T>), and new(array<T>) are rejected. Instantiate with [n]T
 then pass, return, or assign that value instead.
 
 An array<T> argument is passed as a pointer to its header. Before executing the
@@ -76,7 +80,7 @@ arrays or raw buffers. 'array' is reserved in the type namespace: it cannot be
 a declared type name or type parameter name. It remains valid as a variable
 name. Bare 'array' is not a type or constraint; use array<any>.
 
-Both T[n] and array<T> support len, bounds-checked indexing, two-binding checked
+Both [n]T and array<T> support len, bounds-checked indexing, two-binding checked
 indexing, range iteration, value assignment, and concatenation with + or +=.
 On runtime-sized arrays, len and bounds checks derive the element count from
 the byte-size header and element storage size. .size reads payload bytes;
@@ -85,24 +89,24 @@ error. The two-binding form returns zero and false instead:
 
     value, ok := result[len(result)];
 
-The array header participates in sizeof(T[n]) and struct field layouts. Raw
+The array header participates in sizeof([n]T) and struct field layouts. Raw
 buffer<T> storage has no array header. Use .data to pass array elements to C.
 
 Raw buffers
 
-buffer<T>[n] is unchecked element storage with lexical length metadata, not an
-array value. buffer<T> and buffer<T>[] carry a raw element pointer. Function
+buffer<T, n> is unchecked element storage with lexical length metadata, not an
+array value. buffer<T> carries a raw element pointer. Function
 parameters erase a buffer's length; a sized cast can restore it. Buffer data
 is not automatically owned or freed as array/string backing memory.
 
-Dynamic arrays: T[]
+Dynamic arrays: []T
 
 Dynamic arrays have a length/capacity/data header and heap-backed element data.
 They can change length through reassignment, concatenation, and mutation methods:
 
-    values := make(int[]);
-    values: int[] = {1, 2};
-    pointer := new(int[]); // *int[], initially empty
+    values := make([]int);
+    values: []int = {1, 2};
+    pointer := new([]int); // *[]int, initially empty
 
 Methods:
     array()               // independent array<T> copy of the current elements
@@ -131,7 +135,7 @@ string is an immutable heap-backed dynamic array of i8. Its capacity equals its
 length. Indexing reads bytes; element writes, mutable element addresses, and
 add/append/prepend/remove/pop are rejected. Length and capacity are read-only.
 Reassignment and += replace the string with an independently allocated value
-and automatically release its old backing storage. String/i8[] conversions
+and automatically release its old backing storage. String/[]i8 conversions
 copy bytes; mutable copies cannot modify the original string. String .data
 passed to a function is a separate temporary byte buffer valid for that call.
 
@@ -163,7 +167,7 @@ and closes probe clusters on deletion. Integer, floating, string, pointer,
 array, struct, and boxed keys are hashed by value; maps and enums currently
 share a collision seed and use equality to resolve collisions. The indirect
 bucket header and storage are internal, with no public data or capacity view.
-Array/pointer suffixes after map[K] belong to V. Use aliases for arrays of maps.
+Type modifiers are prefixes: map[K][]V maps to arrays and []map[K]V is an array of maps.
 Maps require no standard-library package, compiler flag, or build change.
 
 Ownership and allocation

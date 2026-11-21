@@ -45,10 +45,10 @@ int main(void) {
         LESS_THAN, GREATER_THAN, LESS_EQUALS, GREATER_EQUALS, BITSHIFT_LEFT,
         BITSHIFT_RIGHT, BITWISE_OR, LOGICAL_OR, LOGICAL_AND, EQUALS,
         PLUS_EQUALS, MINUS_EQUALS, STAR_EQUALS, SLASH_EQUALS, MODULO_EQUALS,
-        XOR_EQUALS, TILDE_EQUALS, AMPERSAND_EQUALS, BITWISE_OR_EQUALS,
+        XOR_EQUALS, AMPERSAND_EQUALS, BITWISE_OR_EQUALS,
         BITSHIFT_LEFT_EQUALS, BITSHIFT_RIGHT_EQUALS, PLUS_PLUS, MINUS_MINUS};
     kinds("{ } ( ) [ ] _ ; , . : ? -> + - * / % ^ & ~ ! == != < > <= >= << >> "
-          "| || && = += -= *= /= %= ^= ~= &= |= <<= >>= ++ --",
+          "| || && = += -= *= /= %= ^= &= |= <<= >>= ++ --",
           operators, sizeof(operators) / sizeof(*operators));
     tokenlist *list = scan("alpha\n beta2\tindex\r\nreturning");
     assert(list->top == 5 && !strcmp(list->arr[0].lexeme, "alpha") &&

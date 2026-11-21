@@ -153,7 +153,13 @@ ocean build --emit-llvm . -o application.ll
 ocean build --check .
 ocean check --lsp
 ocean clean --cache
+ocean fix ./...
 ```
+
+`ocean fix [location...]` rewrites the removed postfix type syntax (`int[]`,
+`T*`, `buffer<T>[N]`) to prefix syntax (`[]int`, `*T`, `buffer<T, N>`) in place,
+including `*_test.oc` files; `dir/...` covers every package below `dir`. It is
+idempotent and leaves everything outside rewritten types unchanged.
 
 A location is a directory or a file selecting its entire containing package.
 `check` defaults to the current directory and checks imports, semantics, backend
@@ -283,7 +289,7 @@ replace codeberg.org/example/collections => ../collections
 Module subdirectories are separate packages. `require` selects Git tags or
 branches. `replace` accepts a local module directory with its own `ocean.mod`, or
 another module and version. Single-line and parenthesized directives, quoted
-paths, and `//` comments work.
+paths, and `//` comments work. A `go <version>` directive is an error.
 
 ```ocean
 package main;
@@ -322,9 +328,21 @@ zero values, even when their explicit initializer has not run yet.
 ## Core syntax
 
 Statements end in `;` unless they end in a block. Use braces and parenthesized
-control-flow conditions. Variables use `name: Type`, parameters and fields use
-`name Type`, and inferred declarations use `:=`. Externs and named results have
-different, type-first ordering.
+control-flow conditions. Variables use `name: Type` and inferred declarations
+use `:=`. Parameters, named results, and fields use `name Type`. Extern
+declarations use C ordering.
+
+Every type modifier is a prefix that applies to the whole type after it:
+`[]T` (dynamic array), `[n]T` (array), `[...]T{...}` (array sized by its literal),
+`*T` (pointer), `mixed []I`, and `map[K]V`. So `[]*Node` is an array of pointers,
+`*[]Node` a pointer to an array, `[3][2]int` three `[2]int`s, `[]map[string]int`
+an array of maps, and `[]func() int` an array of functions. Raw buffers take their
+size as a second argument: `buffer<T, n>` (sized) and `buffer<T>` (unsized). The
+same spellings work in expressions: `[]int{1, 2}`, `[n]T` allocation,
+`buffer<int, n>` allocation, and casts such as `data->[n]int`. Postfix forms
+(`int[]`, `T*`, `buffer<T>[N]`) are errors that name the prefix spelling, e.g.
+"Square brackets go before the type for an array. Did you mean '[]int'?";
+`ocean fix` rewrites them.
 
 ```ocean
 package main;
@@ -338,7 +356,7 @@ func sum(values ...int) (int, int) {
 }
 func main() int {
     count: int = 3;
-    values: int[] = {1, 2, 3};
+    values: []int = {1, 2, 3};
     total, length := sum(values...);
     if (length != count) { panic "unexpected length"; }
     for (i := 0; i < count; i++) { total += twice(i); }
@@ -360,7 +378,7 @@ initializers, assignments, returns, and collection elements. Fitting integer
 literals may directly initialize or supply narrower types (`small: i8 = 42`);
 integer expressions and variables are checked by type, not their current value.
 Pointer and collection element storage types must match; scalar widening does
-not convert an `i8[]` into an `i32[]`. Mixed-width integer arithmetic promotes
+not convert an `[]i8` into an `[]i32`. Mixed-width integer arithmetic promotes
 to 64 bits; fitting literals use the other operand's type. Mixed signed/unsigned
 arithmetic needs a cast if no signed 64-bit type can represent both ranges.
 
@@ -375,6 +393,11 @@ operands; storing a float result in an integer requires an explicit cast.
 Integer variables and expressions still require an explicit cast in float
 initializers, ordinary assignments, arguments, and returns; `value := 0` infers `int`.
 
+An `f32` value widens implicitly to `float` (`f64`). A typed `f64` value
+requires a cast to narrow to `f32`. A floating-point literal takes the expected
+type, as in `small: f32 = 1.5;`, and defaults to `float` without a narrower
+context.
+
 Use `value -> Type` for casts and parentheses for compound targets, such as
 `raw -> (*Point)` or `value -> (pkg.Type)`. Arithmetic, bit operations,
 comparisons, compound assignments, `++`, `--`, short-circuit `&&`/`||`, and
@@ -383,14 +406,14 @@ comparisons, compound assignments, `++`, `--`, short-circuit `&&`/`||`, and
 are defaulted. Explicit returns avoid implicit zero-return warnings.
 
 Multiple results unpack with `a, b := f();` or simultaneous assignment; `_`
-discards a result. Named results use `(int total, count)` and allow `return;`.
+discards a result. Named results use `(total, count int)` and allow `return;`.
 A final `values ...T` parameter accepts variadic values; use a final `items...`
 to expand an array. `...any` permits heterogeneous arguments.
 
 Function literals use `func(parameters) resultType { body }`; omit the result
-type for a function with no results. Their types use the same signature without
-the body: `func(int) int`, `func()`, or `func() (int, bool)`. Parameter names do
-not affect type identity. Parameter and result types, their storage widths,
+type for a function with no results. Function types always start with `func`
+and omit the body, as in `func(int) int`, `func()`, or `func() (int, bool)`.
+Parameter names do not affect type identity. Parameter and result types, their storage widths,
 and the variadic marker must match. Functions can be assigned to variables,
 passed as arguments, returned, stored in structs or arrays, and boxed in `any`.
 Named functions are values too; specialize generic functions explicitly, such
@@ -406,15 +429,15 @@ loop initializer retains its ordinary loop scope. Captured storage currently
 lives until process exit, when the runtime releases its owned values. Raw pointer
 and buffer captures still borrow their pointees and backing storage.
 
-Use a type alias for arrays of functions, such as `type Callback = func() int;`
-then `callbacks: Callback[3];`. A suffix in `func() int[3]` belongs to the result
-type. An uninitialized function value panics if called. Function values use an
+Type modifiers are prefixes, so arrays of functions need no alias:
+`callbacks: [3]func() int;` holds three functions, while `func() [3]int` is a
+function returning an array. An uninitialized function value panics if called. Function values use an
 Ocean closure ABI and cannot be passed directly as native C function pointers.
 Calls through interface methods dispatch to the boxed concrete receiver. Bound method values remain unsupported.
 
 ```ocean
-func map(data array<int>, closure func(int) int) int[] {
-    result := make(int[]);
+func map(data array<int>, closure func(int) int) []int {
+    result := make([]int);
     for (i := 0; i < len(data); i++) {
         result.append(closure(data[i]));
     }
@@ -423,7 +446,7 @@ func map(data array<int>, closure func(int) int) int[] {
 
 func main() int {
     offset := 3;
-    values := int[2]{1, 2};
+    values := [2]int{1, 2};
     mapped := map(values, func(n int) int { return n + offset; });
     return mapped[0] + mapped[1]; // 9
 }
@@ -487,21 +510,21 @@ Choose the collection explicitly; these types have different storage and APIs:
 
 | Form | Meaning |
 | --- | --- |
-| `T[n]` | Value array with length in its type when constant; immutable `.size` is payload bytes, `.data` exposes raw elements. |
-| `array<T>` | Length-independent array value/constraint; accepts `T[n]` of any length. |
-| `T[]` | Heap-backed dynamic array with length, capacity, and data; grows with mutation methods. |
-| `buffer<T>[n]` | Raw unchecked storage with lexical length metadata. |
-| `buffer<T>` / `buffer<T>[]` | Raw pointer view, without stored length or ownership. |
+| `[n]T` | Value array with length in its type when constant; immutable `.size` is payload bytes, `.data` exposes raw elements. |
+| `array<T>` | Length-independent array value/constraint; accepts `[n]T` of any length. |
+| `[]T` | Heap-backed dynamic array with length, capacity, and data; grows with mutation methods. |
+| `buffer<T, n>` | Raw unchecked storage with lexical length metadata. |
+| `buffer<T>` | Raw pointer view, without stored length or ownership. |
 | `string` | Immutable heap-backed bytes; capacity equals length. |
 | `map[K]V` | Hash map with independently typed keys and values; interface sides always allow mixed concrete types. |
 
 ```ocean
-fixed: int[3] = {1, 2, 3};
-counted := int[...]{4, 5};       // int[2]
-inferred := {6, 7};             // int[2], not a dynamic array
+fixed: [3]int = {1, 2, 3};
+counted := [...]int{4, 5};       // [2]int
+inferred := {6, 7};             // [2]int, not a dynamic array
 n := 4;
-runtime: int[n];
-items := make(int[]);
+runtime: [n]int;
+items := make([]int);
 items.append(2, 3);
 items.prepend(1);
 items.add(1, 8, 9);
@@ -515,7 +538,7 @@ Ordinary array/dynamic-array indexing checks bounds. Raw buffer indexing does
 not. Buffer lengths are erased at function boundaries: pass an explicit count;
 a sized cast can restore lexical metadata. `len` is element count; `.size` is
 payload bytes. Dynamic arrays expose `.length` and `.capacity`. Empty dynamic
-arrays (`items: int[]`, `make(int[])`, `zero(int[])`, or `int[]{}`) start with
+arrays (`items: []int`, `make([]int)`, `zero([]int)`, or `[]int{}`) start with
 length and capacity zero; the first single-element append grows capacity to eight.
 Arrays initialized with values start with capacity equal to their length.
 `append`, `prepend`, `add`, and dynamic-array `+=` reuse spare capacity and grow to the
@@ -530,14 +553,14 @@ compatible arrays, including self-concatenation; strings and fixed-array `+=`
 retain their existing copy behavior. Strings expose byte counts and `.array()`,
 but reject element writes and mutation methods.
 
-Construct arrays using `x: T[n]` or `T[n]{...}`. For compatibility, expression
-`T[n]` without a literal body creates a dynamic array. `array<T>` is not a
+Construct arrays using `x: [n]T` or `[n]T{...}`. For compatibility, expression
+`[n]T` without a literal body creates a dynamic array. `array<T>` is not a
 constructor: no `array<T>{...}`, uninitialized `array<T>`, `zero(array<T>)`, or
-`new(array<T>)`. Construct `T[n]` and pass it to `array<T>` parameters instead.
+`new(array<T>)`. Construct `[n]T` and pass it to `array<T>` parameters instead.
 Bare `array` is invalid; `array<any>` matches arrays, not dynamic arrays/buffers.
 
 Typed literals are required in call arguments and return expressions:
-`consume(int[]{1, 2});`, not `consume({1, 2});`. Assignment destinations supply
+`consume([]int{1, 2});`, not `consume({1, 2});`. Assignment destinations supply
 literal types. Fixed array/buffer literals zero-fill omitted elements. Struct
 literals accept positional or keyed fields. `+` concatenates collections or
 adds a compatible element; `+=` replaces the destination. `.data = {...}` copies
@@ -546,7 +569,7 @@ into existing payload storage rather than rebinding the collection.
 Slicing uses `items[start:end]`, including `start` and excluding `end`.
 `items[:]`, `items[:2]`, `items[2:]`, and `items[1:2]` are supported;
 omitted bounds default to zero and the collection length. For example,
-`{0, 1, 2, 3, 4}[1:3]` produces `int[]{1, 2}`. Arrays, dynamic arrays,
+`{0, 1, 2, 3, 4}[1:3]` produces `[]int{1, 2}`. Arrays, dynamic arrays,
 and typed buffers produce a new dynamic array; strings produce a new string
 (sliced by byte). The result owns only the selected elements, with no shared
 backing storage, and nested owned values are copied recursively. Empty slices
@@ -564,7 +587,13 @@ array field in an owned element releases the previous field and gives the elemen
 ownership of the replacement. Borrowed raw buffer fields still alias their
 original storage.
 Pointers and buffer views copy addresses. Use `*T`, `&value`, and `*pointer` for
-shared access; `*T[]` points to a dynamic array while `T*[]` holds pointers.
+shared access; `*[]T` points to a dynamic array while `[]*T` holds pointers.
+For a sized pointee, `p + n`, `n + p`, and `p - n` count elements. Pointer
+updates use `+=`, `-=`, `++`, and `--`. Subtract identical pointer types into
+one array to get an `int` element difference. Arithmetic has no bounds checks
+and traps on `null`. `ip: *int = 5;` and `ip := 5->(*int);` both initialize the
+pointer to address `0x5`. Use an explicit cast for integer addresses in
+reassignments and function arguments, as in `ip = 5->(*int)` or `f(5->(*int))`.
 `new(T)` returns an explicitly managed `*T` initialized to `zero(T)`;
 `free(pointer)` releases owned contents and the allocation, without following
 pointer fields. Pointer scope exit never frees the pointee. `free(items)` can
@@ -573,7 +602,7 @@ release dynamic storage early; recreate it before further use.
 Explicit `null` is distinct from a default zero-address pointer. Initialize list
 terminators explicitly: `p: *Node = null;`. `p := null` cannot infer a type.
 Strings compare byte contents with `==`/`!=` and support unsigned-byte
-lexicographic ordering with `<`, `<=`, `>`, and `>=`. String-to-`i8[]` conversions copy.
+lexicographic ordering with `<`, `<=`, `>`, and `>=`. String-to-`[]i8` conversions copy.
 String `.data` in a call is an isolated temporary buffer valid for that call;
 create a named mutable byte array for persistent C access.
 
@@ -620,7 +649,7 @@ func indexOf<T>(data array<T>, value T) int {
 struct Person { name string; age int; }
 
 func main() int {
-    people := Person[2]{{"Ada", 36}, {"Lin", 28}};
+    people := [2]Person{{"Ada", 36}, {"Lin", 28}};
     if (indexOf<Person>(people, Person{"Lin", 28}) != 1) return 1;
     if (!("apple" < "banana" && "a" < "aa")) return 2;
     return 0;
@@ -676,9 +705,9 @@ when they have the same entries, regardless of insertion order or capacity.
 Mutable map types require identical key and value types; map conversion does
 not implicitly widen an existing concrete map to an interface map.
 
-Array and pointer suffixes after `map[K]` belong to the value type:
-`map[string]int[]` maps strings to dynamic arrays and `map[string]*int` maps
-strings to pointers. Use an alias to make an array of maps. Maps support normal
+Type modifiers are prefixes: `map[string][]int` maps strings to dynamic arrays,
+`map[string]*int` maps strings to pointers, and `[]map[string]int` is a dynamic
+array of maps. Maps support normal
 parameters, results, struct fields, explicit generics, and boxed type assertions.
 Map storage is managed automatically and has no public `.data` or capacity API.
 Updating an existing key reuses its bucket without growing or rehashing the table,
@@ -746,7 +775,7 @@ struct Box<T> { value T; }
 func identity<T>(value T) T { return value; }
 func (b *Box<T>) Set(value T) { b.value = value; }
 func (b Box<T>) Pair<U>(other U) (T, U) { return b.value, other; }
-struct Matrix(height, width int) { data int[height][width]; }
+struct Matrix(height, width int) { data [width][height]int; }
 type UserID int;                 // distinct identity
 type ID = UserID;                // alias, same identity
 ```
@@ -759,11 +788,12 @@ values automatically. Struct value parameters are immutable fields preceding
 ordinary fields, initialized once in literals such as `Matrix{2, 3}`.
 
 A defined type needs explicit casts to/from its underlying type; aliases do not.
+Boxing a defined type in `any` preserves its concrete type identity.
 Generic constraints include interfaces, unions, `~T` underlying types, and struct
 families (`Box` versus `Box<int>`). Boxed `any` values support type assertions
 and type switches. `value.(T)` traps on a mismatch; the two-binding form
 `msg, ok := value.(string);` yields the zero value and `false` instead (also in
-`=` assignments and `if (s, ok := value.(string); ok)` initializers). `mixed any[]` allows heterogeneous elements; ordinary
+`=` assignments and `if (s, ok := value.(string); ok)` initializers). `mixed []any` allows heterogeneous elements; ordinary
 interface arrays require one concrete element type. Interface method calls
 dispatch to the boxed concrete receiver.
 
@@ -928,10 +958,10 @@ saved IR manually). Other architecture/platform combinations report unsupported
 output. Writes handle partial results and retry Unix interruptions; other output
 failures return error Results. Float formatting is portable Ocean code with exact binary64
 conversion and round-to-nearest, ties-to-even, independent of the C locale.
-Default printed floats retain two decimal places. Mutable `i8[]` values print as
+Default printed floats retain two decimal places. Mutable `[]i8` values print as
 comma-separated decimal bytes, for example `[1, 5, 3]`; strings print as text.
 Use `bytes -> string` to print byte contents as text. Concrete `string` and
-`i8[]` type-switch cases are distinct, including inside nested collection types.
+`[]i8` type-switch cases are distinct, including inside nested collection types.
 Compiler runtime and boxed values still use native libraries/libffi; this does
 not make executables freestanding.
 
@@ -971,7 +1001,7 @@ is immediately encountered. Scan stops at ASCII whitespace; Scanln stops at
 newline or EOF; a preceding CR is retained. Scanc stops at the requested
 byte or EOF. EOF is a successful result, including an empty string.
 
-`scanner.Scann(n)` returns `Result<io.ScanResult>`, with `Bytes i8[]` and
+`scanner.Scann(n)` returns `Result<io.ScanResult>`, with `Bytes []i8` and
 `End bool` fields. It reads up to n bytes; End is true when EOF prevents filling
 the request. Unlike File.Readn, the scanner buffer contains only bytes read.
 Zero reads succeed without consuming input; negative sizes panic.
@@ -989,7 +1019,7 @@ another reader can consume data before a subsequent scan.
 | `Readn(n)` | `Result<os.ReadResult>`: `Bytes array<i8>` of length n, `End bool` for early EOF; unused bytes are zero-filled |
 | `Readend()` | `Result<array<i8>>`: current position through EOF, advances cursor |
 | `Readall()` | `Result<array<i8>>`: entire file, preserves cursor and previous EOF state |
-| `Readchunk(n)` | `Result<i8[]>`: up to n bytes; successful empty buffer at EOF |
+| `Readchunk(n)` | `Result<[]i8>`: up to n bytes; successful empty buffer at EOF |
 | `Size()` | `Result<int>`: size in bytes, requires a seekable file |
 | `PollRead()` | `Result<int>`: OS readiness information without blocking |
 | `Write(text)` | `Result<int>`: number of bytes written |
@@ -1220,8 +1250,8 @@ below. This clock supports HTTP's overall deadlines.
 
 Use the matching standard-library tree with the compiler fixes for mutable
 interface arrays, owned boxed array elements, enum payload tuples, and fields
-whose names match their types (for example `Header Header`). Mutable `any[]`
-remains homogeneous; use `mixed any[]` for JSON arrays. Interface arrays support
+whose names match their types (for example `Header Header`). Mutable `[]any`
+remains homogeneous; use `mixed []any` for JSON arrays. Interface arrays support
 append/prepend/add/remove/pop and normal value-copy ownership. Recursive owning
 array/map layouts remain unsupported and report a diagnostic rather than
 crashing; use explicit pointers for recursive ownership.
@@ -1229,13 +1259,13 @@ crashing; use explicit pointers for recursive ownership.
 ### encoding/json
 
 `json.Marshal(value any) Result<string>` encodes null, bool, string, all integer
-widths, finite floats, structs, `map[string]any`, `mixed any[]`, and dynamic
-`int[]`, `string[]`, `float[]`, and `bool[]`. Map keys are sorted. Struct encoding
+widths, finite floats, structs, `map[string]any`, `mixed []any`, and dynamic
+`[]int`, `[]string`, `[]float`, and `[]bool`. Map keys are sorted. Struct encoding
 includes private fields under their exact names; tags and custom marshalers are
 not implemented. Unsupported types return errors.
 
 `json.Unmarshal(text string) Result<any>` returns null, bool, string,
-`json.Number`, `mixed any[]`, or `map[string]any`; it does not fill a pointer.
+`json.Number`, `mixed []any`, or `map[string]any`; it does not fill a pointer.
 Duplicate keys retain the last value. `Number { Text string }` preserves numeric
 spelling and exposes `Int64() Result<int>` and `Float64() Result<float>`.
 `json.Valid(text string) bool` checks an entire document. UTF-8, escapes,

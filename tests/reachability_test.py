@@ -96,8 +96,8 @@ with tempfile.TemporaryDirectory(prefix='ocean reachability ') as directory:
     text = emit('''import "reflect";
         struct Inner { n int; } struct Outer { child Inner; }
         func main() int {
-            values: any = Outer[]{Outer{Inner{7}}};
-            rows := values.(mixed any[]);
+            values: any = []Outer{Outer{Inner{7}}};
+            rows := values.(mixed []any);
             outer := reflect.Fields(rows[0]);
             inner := reflect.Fields(outer[0].Value);
             return inner[0].Value.(int) - 7;

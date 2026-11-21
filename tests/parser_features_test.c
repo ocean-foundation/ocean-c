@@ -68,15 +68,15 @@ int main(void) {
     assert(zeroExpr.type == EXPR_TYPE_ZERO && zeroExpr.location.line == 1 && zeroExpr.location.column == 1);
     struct expr_zero *zero = zeroExpr.underlying;
     assert(zero->type.nTokens == 1 && !strcmp(zero->type.tokens[0].lexeme, "int"));
-    zeroExpr = expression("zero(*Box<buffer<T>[4]>);");
+    zeroExpr = expression("zero(*Box<buffer<T, 4>>);");
     assert(zeroExpr.type == EXPR_TYPE_ZERO && ((struct expr_zero *)zeroExpr.underlying)->type.tokens[0].type == STAR);
     zeroExpr = expression("zero(Box<int>).value;");
     assert(zeroExpr.type == EXPR_TYPE_DOT && ((struct expr_dot *)zeroExpr.underlying)->parent.type == EXPR_TYPE_ZERO);
-    zeroExpr = expression("zero(buffer<int>[3])[1];");
+    zeroExpr = expression("zero(buffer<int, 3>)[1];");
     assert(zeroExpr.type == EXPR_TYPE_INDEX && ((struct expr_index *)zeroExpr.underlying)->parent.type == EXPR_TYPE_ZERO);
     invalid("zero();"); invalid("zero(int, bool);"); invalid("zero(1);"); invalid("zero(int + 1);");
     invalid("zero(int;");
-    truncatedInputs("zero(*Box<buffer<T>[4]>);");
+    truncatedInputs("zero(*Box<buffer<T, 4>>);");
 
     expr e = expression("a - b - c;");
     bin(bin(e, EXPR_SUBTRACT)->left, EXPR_SUBTRACT);
@@ -106,7 +106,7 @@ int main(void) {
     r = valid("struct Point { x, y int; names []string; }", 1);
     struct stmt_struct *point = r.statements[0].value;
     assert(point->nFields == 3 && !strcmp(point->fieldNames[1].lexeme, "y"));
-    r = valid("struct Pair<T, U any, V ~int | ~string,> { first T; second U; tag V; next Pair<T, U, V>*; }", 1);
+    r = valid("struct Pair<T, U any, V ~int | ~string,> { first T; second U; tag V; next *Pair<T, U, V>; }", 1);
     point = r.statements[0].value;
     assert(point->nTypeParams == 3 && point->nFields == 4);
     assert(!strcmp(point->typeParamNames[0].lexeme, "T") &&
@@ -118,20 +118,21 @@ int main(void) {
     assert(point->typeParamConstraints[2].nTokens == 5 &&
            point->typeParamConstraints[2].tokens[2].type == BITWISE_OR);
     assert(!strcmp(point->fieldTypes[0].tokens[0].lexeme, "T") &&
-           point->fieldTypes[3].tokens[1].type == LESS_THAN);
-    valid("struct Values<T interface { ~int | ~string; }> { index data []T; }", 1);
+           point->fieldTypes[3].tokens[0].type == STAR &&
+           point->fieldTypes[3].tokens[2].type == LESS_THAN);
+    valid("struct Values<T interface { ~int | ~string; }> { data []T; }", 1);
     valid("struct Empty<T pkg.Constraint> {}", 1);
     valid("struct Box<T any> { value T; } func (self *Box<T>) Get() T { return self.value; } func use() { box: Box<int>; value := Box<int>{value: 1}; }", 3);
     invalid("struct Bad[] {}"); valid("struct Default<T> {}", 1);
     invalid("struct Bad<T any, T any> {}"); invalid("struct Bad<T, T any> {}");
-    invalid("struct Bad<index any> {}"); invalid("struct Bad<T index> {}");
+    valid("struct Named<index any> {}", 1); valid("struct Constrained<T index> {}", 1);
     invalid("struct Bad<T ~> {}"); invalid("struct Bad<T int |> {}");
     invalid("struct Bad[T any {}"); invalid("struct Bad<T any>;");
     r = parse("struct Bad<T any> { int; } struct Good<T any> { value T; }");
     assert(r.hasError && r.nStatements == 1 && r.statements[0].type == STMT_STRUCT &&
            ((struct stmt_struct*)r.statements[0].value)->nTypeParams == 1);
     truncatedInputs("struct Pair<T, U any, V ~int | ~string> { first T; second U; tag V; }");
-    r = valid("struct Matrix<T any>(u64 width, height,) { index underlying T[height][width]; }", 1);
+    r = valid("struct Matrix<T any>(width, height u64,) { underlying [width][height]T; }", 1);
     point = r.statements[0].value;
     assert(point->nTypeParams == 1 && point->nVarParams == 2 && point->nFields == 3);
     assert(!strcmp(point->varParamNames[0].lexeme, "width") &&
@@ -139,15 +140,14 @@ int main(void) {
     assert(point->varParamTypes[0].nTokens == 1 && point->varParamTypes[1].nTokens == 1 &&
            !strcmp(point->varParamTypes[0].tokens[0].lexeme, "u64") &&
            !strcmp(point->varParamTypes[1].tokens[0].lexeme, "u64"));
-    assert(!strcmp(point->indexField.lexeme, "underlying") &&
-           point->fieldTypes[2].nTokens == 7 &&
-           !strcmp(point->fieldTypes[2].tokens[2].lexeme, "height") &&
-           !strcmp(point->fieldTypes[2].tokens[5].lexeme, "width"));
+    assert(point->fieldTypes[2].nTokens == 7 &&
+           !strcmp(point->fieldTypes[2].tokens[1].lexeme, "width") &&
+           !strcmp(point->fieldTypes[2].tokens[4].lexeme, "height"));
     assert(!strcmp(point->fieldNames[0].lexeme, "width") &&
            !strcmp(point->fieldNames[1].lexeme, "height") &&
            !strcmp(point->fieldNames[2].lexeme, "underlying"));
     assert(point->varParamNames == point->fieldNames && point->varParamTypes == point->fieldTypes);
-    r = valid("struct Config(pkg.Size size, []int values, func(x int) (int) transform) { data int[size]; }", 1);
+    r = valid("struct Config(size pkg.Size, values []int, transform func(x int) (int)) { data [size]int; }", 1);
     point = r.statements[0].value;
     assert(point->nTypeParams == 0 && point->nVarParams == 3);
     assert(point->nFields == 4 && !strcmp(point->fieldNames[0].lexeme, "size") &&
@@ -161,8 +161,8 @@ int main(void) {
     assert(point->varParamTypes[2].nTokens == 8 &&
            point->varParamTypes[2].tokens[0].type == FUNC &&
            !strcmp(point->varParamNames[2].lexeme, "transform"));
-    invalid("struct Bad(int size) { size int; }");
-    r = valid("struct View(buffer<int>[] data) { index data; tail int; }", 1);
+    invalid("struct Bad(size int) { size int; }");
+    r = valid("struct View(data buffer<int>) { tail int; }", 1);
     point = r.statements[0].value;
     assert(point->nFields == 2 && point->nVarParams == 1 && !strcmp(point->fieldNames[0].lexeme, "data"));
     r = valid("struct Empty() {} struct GenericEmpty<T any>() {} struct Plain {}", 3);
@@ -170,26 +170,31 @@ int main(void) {
         point = r.statements[i].value;
         assert(point->nVarParams == 0 && !point->varParamTypes && !point->varParamNames);
     }
-    valid("struct Values(int index) { data int[index]; }", 1);
-    valid("struct Grouped<T any>(Box<T> a, b, int count) { data T[count]; }", 1);
+    valid("struct Values(index int) { data [index]int; }", 1);
+    valid("struct Grouped<T any>(a, b Box<T>, count int) { data [count]T; }", 1);
     invalid("struct Bad(int) {}"); invalid("struct Bad(int, string) {}");
-    invalid("struct Bad(int _) {}"); invalid("struct Bad(...int values) {}");
-    invalid("struct Bad(int width, width) {}");
-    invalid("struct Bad(int width, string width) {}");
-    invalid("struct Bad<T any>(int T) {}");
-    invalid("struct Bad(int x = 1) {}"); invalid("struct Bad(int x int y) {}");
-    invalid("struct Bad(,int x) {}"); invalid("struct Bad(int x,,) {}");
-    invalid("struct Bad(int x {}"); invalid("struct Bad(int x);");
-    invalid("struct Bad(int x)[T any] {}");
-    valid("struct Named(index x) {}", 1);
-    r = parse("struct Bad(int width, width) {} struct Good(int length) { data int[length]; }");
+    invalid("struct Bad(_ int) {}"); invalid("struct Bad(values ...int) {}");
+    invalid("struct Bad(width, width int) {}");
+    invalid("struct Bad(width int, width string) {}");
+    invalid("struct Bad<T any>(T int) {}");
+    invalid("struct Bad(x int = 1) {}"); invalid("struct Bad(x int y int) {}");
+    invalid("struct Bad(,x int) {}"); invalid("struct Bad(x int,,) {}");
+    invalid("struct Bad(int x {}"); invalid("struct Bad(x int);");
+    invalid("struct Bad(x int)[T any] {}");
+    valid("struct Named(Index int) {}", 1);
+    invalid("struct Legacy(pkg.Size size) {}");
+    invalid("struct Legacy([]int values) {}");
+    invalid("struct Legacy(*int pointer) {}");
+    invalid("struct Legacy { []int values; }");
+    invalid("enum Legacy { Pair(int value) }");
+    r = parse("struct Bad(width, width int) {} struct Good(length int) { data [length]int; }");
     assert(r.hasError && r.nStatements == 1 && r.statements[0].type == STMT_STRUCT &&
            ((struct stmt_struct*)r.statements[0].value)->nVarParams == 1);
-    r = parse("struct Bad<T any>(int length) { int; } struct Good {}");
+    r = parse("struct Bad<T any>(length int) { int; } struct Good {}");
     assert(r.hasError && r.nStatements == 1 && r.statements[0].type == STMT_STRUCT &&
            !strcmp(((struct stmt_struct*)r.statements[0].value)->name.lexeme, "Good"));
-    truncatedInputs("struct Matrix<T any>(u64 width, height,) { index underlying T[height][width]; }");
-    truncatedInputs("struct Config(pkg.Size size, []int values) { data int[size]; }");
+    truncatedInputs("struct Matrix<T any>(width, height u64,) { underlying [width][height]T; }");
+    truncatedInputs("struct Config(size pkg.Size, values []int) { data [size]int; }");
     r = valid("enum Color { RED, GREEN = 1 + 2 * 3, BLUE, }", 1);
     struct stmt_enum *colors = r.statements[0].value;
     assert(colors->nMembers == 3 && !colors->values[0] && colors->values[1]);
@@ -221,7 +226,7 @@ int main(void) {
     valid("interface EmptyGeneric<T interface { ~int | ~string; }> {}", 1);
     invalid("interface Bad[] {}"); valid("interface Default<T> {}", 1);
     invalid("interface Bad<T any, T any> {}"); invalid("interface Bad<T, T any> {}");
-    invalid("interface Bad<index any> {}"); invalid("interface Bad<T index> {}");
+    valid("interface Named<index any> {}", 1); valid("interface Constrained<T index> {}", 1);
     invalid("interface Bad<T ~> {}"); invalid("interface Bad<T int |> {}");
     invalid("interface Bad[T any {}"); invalid("interface Bad<T any>;");
     r = parse("interface Bad<T any> { ~; } interface Good<T any> { M() T; }");
@@ -235,7 +240,7 @@ int main(void) {
     invalid("interface Bad { | int; }"); invalid("interface Bad { int || string; }");
     valid("interface Number { int }", 1); invalid("interface Bad { Reader Writer; }");
     invalid("interface Bad { pkg.; }"); invalid("interface Bad { Box[int; }");
-    invalid("interface Bad { index; }"); invalid("interface Bad { ~pkg.index; }");
+    valid("interface Indexable { index; }", 1); valid("interface Underlying { ~pkg.index; }", 1);
     invalid("interface Bad { Reader; M(); M(); }");
     invalid("interface Bad { Reader; func int; }");
     invalid("interface Bad { Reader; M() {} }");
@@ -268,8 +273,8 @@ int main(void) {
     valid("func f() { d: defer cleanup(); for (;;) { b: break; c: continue; } }", 1);
     valid("t: type Count int; s: struct Point { x int; } e: enum E { A } i: interface I { M(); } f: func run() {} x: extern void external(void);", 6);
     valid("func f() { i: if (x) return; s: switch { default: return; } }", 1);
-    r = valid("x: int; y: pkg.Type = value; z := 1; callback: int(); "
-              "a, b: int; ptr: int*;", 6);
+    r = valid("x: int; y: pkg.Type = value; z := 1; callback: func() int; "
+              "a, b: int; ptr: *int;", 6);
     for (size_t i = 0; i < r.nStatements; i++) assert(r.statements[i].type == STMT_VAR);
     invalid("func f() { missing: }"); invalid("missing:");
     invalid("func f() { a: b: }");
@@ -358,55 +363,36 @@ int main(void) {
     tokenlist *indexTokens = scanTokens("index", "index-identifier");
     assert(indexTokens->arr[0].type == IDENTIFIER); free_tokenlist(indexTokens); free(indexTokens); checks++;
     valid("index := 0; index : int = 1;", 2);
-    valid("func f(index int) (int indexResult) { return index; }", 1);
+    valid("func f(index int) (indexResult int) { return index; }", 1);
     valid("func index() {}", 1);
+    // index is an ordinary identifier, including as a field or type name.
     valid("struct Values { index, other int; }", 1);
-    r = valid("struct Values { index data []int; }", 1);
-    point = r.statements[0].value;
-    assert(point->nFields == 1 && !strcmp(point->indexField.lexeme, "data"));
-    r = valid("struct Matrix { index underlying T[height][width]; }", 1);
-    point = r.statements[0].value;
-    assert(point->fieldTypes[0].nTokens == 7 && !strcmp(point->indexField.lexeme, "underlying"));
-    r = valid("struct Values { data []int; index data; }", 1);
-    assert(!strcmp(((struct stmt_struct*)r.statements[0].value)->indexField.lexeme, "data"));
-    valid("struct Values { index data; data []int; }", 1);
-    valid("struct Values { index []int; index index; }", 1);
-    valid("struct Values { index index []int; }", 1);
+    valid("struct Values { index []int; }", 1);
     valid("func f(values [index]int) {}", 1);
-    valid("struct Values { data int[index]; }", 1);
-    invalid("value := index{};"); invalid("value := pkg.index{};");
-    invalid("x : index;"); invalid("x : *index;"); invalid("x : []index;");
-    invalid("func f(value index) {}"); invalid("func f() index {}");
-    invalid("func f<T index>(value T) {}"); invalid("func f<index any>() {}");
-    invalid("type index int;"); invalid("type Alias index;");
-    invalid("struct index {}"); invalid("interface index {}"); invalid("enum index { A }");
-    invalid("func f(value pkg.index) {}");
-    invalid("struct Values { index missing; }");
-    invalid("struct Values { index a, b []int; }");
-    invalid("struct Values { index a []int; index a; }");
+    valid("struct Values { data [index]int; }", 1);
+    valid("type index int; struct Box { value index; } func f(value *index) []index { return []index{}; }", 3);
     invalid("struct Values { index; }");
     invalid("struct Values { index data index; }");
     // Type bodies and brackets must contain grammar, not just balanced tokens.
     valid("type Record struct { x, y int; names []string; };", 1);
-    valid("type Indexed struct { index data []int; };", 1);
-    valid("type Indexed struct { index data; data []int; };", 1);
+    valid("type Indexed struct { data []int; };", 1);
     valid("type Reader interface { Read(buffer []byte) (int, error); Close(); };", 1);
     valid("type Constraint interface { ~int | ~string | Reader };", 1);
     valid("func nested<T interface { M(x int) int; }>(x T) {}", 1);
     valid("type Nested Box<map[string][]int, struct { x int; }, func()>;", 1);
     valid("type Array [2 * (pkg.Width + 1)]int;", 1);
-    valid("type Matrix int[height + 1][width << 2];", 1);
-    valid("type DynamicArray []int; type Suffix int[];", 2);
+    valid("type Matrix [width << 2][height + 1]int;", 1);
+    valid("type DynamicArray []int; type Suffix []int;", 2);
     valid("type Callback func();", 1);
     invalid("type Bad struct { garbage; };");
     invalid("type Bad struct { y int x int; };");
     invalid("type Bad struct { x int; x string; };");
-    invalid("type Bad struct { index missing; };");
+    valid("type Fields struct { index missing; };", 1);
     invalid("type Bad struct { index a, b []int; };");
     invalid("type Bad interface { M(x int y int); };");
     invalid("type Bad interface { M(); M(); };");
     invalid("type Bad interface { func int; };");
-    invalid("type Bad [1.foo]int;");
+    invalid("type Bad [1 +]int;");
     invalid("type Bad interface { ~; };");
     invalid("type Bad interface { int |; };");
     invalid("type Bad interface { M() int garbage; };");
@@ -419,7 +405,7 @@ int main(void) {
     invalid("type Bad [1 2]int;");
     invalid("type Bad [a = 2]int;");
     invalid("type Bad [1, 2]int;");
-    invalid("type Bad int[width +];");
+    invalid("type Bad [width +]int;");
     invalid("type Bad int[(width];");
     truncatedInputs("type Record struct { values Box<int, string>; }; type C interface { M(x []int) int; };");
     e = expression("number->int8;");
@@ -427,47 +413,48 @@ int main(void) {
     struct expr_typecast *cast = e.underlying;
     assert(cast->type.nTokens == 1 && !strcmp(cast->type.tokens[0].lexeme, "int8"));
     assert(cast->child.type == EXPR_TYPE_IDENTIFIER);
-    e = expression("ptr->(string*);");
+    e = expression("ptr->(*string);");
     assert(e.type == EXPR_TYPE_TYPECAST);
     cast = e.underlying;
-    assert(cast->type.nTokens == 2 && cast->type.tokens[1].type == STAR);
-    e = expression("funcPtr->(string()*);");
+    assert(cast->type.nTokens == 2 && cast->type.tokens[0].type == STAR);
+    e = expression("funcPtr->(func() *string);");
     assert(e.type == EXPR_TYPE_TYPECAST);
     cast = e.underlying;
-    assert(cast->type.nTokens == 4 && cast->type.tokens[3].type == STAR);
-    e = expression("funcPtr->((int, float)(int)*);");
+    assert(cast->type.nTokens == 5 && cast->type.tokens[0].type == FUNC);
+    e = expression("funcPtr->(*func(int) (int, float));");
     assert(e.type == EXPR_TYPE_TYPECAST);
     cast = e.underlying;
-    assert(cast->type.nTokens == 9 && cast->type.tokens[8].type == STAR);
+    assert(cast->type.nTokens == 10 && cast->type.tokens[0].type == STAR);
     e = expression("number->int8 * factor + 2;");
     assert(bin(bin(e, EXPR_ADD)->left, EXPR_MULTIPLY)->left.type == EXPR_TYPE_TYPECAST);
     e = expression("(a + b)->int;");
     assert(e.type == EXPR_TYPE_TYPECAST && ((struct expr_typecast*)e.underlying)->child.type == EXPR_TYPE_BINARY);
-    e = expression("ptr->(string**).field;");
+    e = expression("ptr->(**string).field;");
     assert(e.type == EXPR_TYPE_DOT && ((struct expr_dot*)e.underlying)->parent.type == EXPR_TYPE_TYPECAST);
-    e = expression("funcPtr->(string()*)();");
+    e = expression("funcPtr->(func() *string)();");
     assert(e.type == EXPR_TYPE_CALL && ((struct expr_call*)e.underlying)->func.type == EXPR_TYPE_TYPECAST);
     e = expression("number->int->int8;");
     assert(e.type == EXPR_TYPE_TYPECAST && ((struct expr_typecast*)e.underlying)->child.type == EXPR_TYPE_TYPECAST);
     valid("value := number->UnknownType;", 1);
-    valid("value := ptr->(pkg.Type*);", 1);
+    valid("value := ptr->(*pkg.Type);", 1);
     valid("value := ptr->([]int);", 1);
     valid("value := ptr->(Box<int>);", 1);
-    valid("value := funcPtr->((int, float)(string*, pkg.Type)*);", 1);
-    valid("type Callback (int, float)(string*)*;", 1);
-    valid("func f(ptr string*, callback int(int)*) {}", 1);
+    valid("value := funcPtr->(*func(*string, pkg.Type) (int, float));", 1);
+    valid("type Callback *func(*string) (int, float);", 1);
+    valid("func f(ptr *string, callback *func(int) int) {}", 1);
     e = expression("int8(number);"); assert(e.type == EXPR_TYPE_CALL);
     e = expression("string*(ptr);"); bin(e, EXPR_MULTIPLY);
     e = expression("f(x)->(int);"); assert(e.type == EXPR_TYPE_TYPECAST);
     e = expression("array[i]->int;"); assert(e.type == EXPR_TYPE_TYPECAST);
     e = expression("a - b > c;"); bin(bin(e, EXPR_GREATER_THAN)->left, EXPR_SUBTRACT);
     invalid("ptr->string*;"); invalid("ptr->pkg.Type;");
-    invalid("ptr->[]int;"); assert(expression("ptr->(Box<int>);").type == EXPR_TYPE_TYPECAST);
-    invalid("funcPtr->string()*;"); invalid("funcPtr->(int, float)(int)*;");
+    valid("x := ptr->[]int;", 1); // [..]T casts need no parentheses, like buffer<T, N>. assert(expression("ptr->(Box<int>);").type == EXPR_TYPE_TYPECAST);
+    invalid("funcPtr->string()*;");
+    invalid("funcPtr->(string());"); invalid("funcPtr->(int, float)(int)*;");
     invalid("number->;"); invalid("number->();"); invalid("number->(int;");
-    invalid("number->(int garbage);"); invalid("number->index;");
+    invalid("number->(int garbage);"); valid("x := number->index;", 1);
     invalid("funcPtr->((int, float)(int x int y)*);");
-    truncatedInputs("x := funcPtr->((int, float)(int)*); y := ptr->(string*); z := number->int8;");
+    truncatedInputs("x := funcPtr->(*func(int) (int, float)); y := ptr->(*string); z := number->int8;");
     e = expression("identity<int>(x);");
     assert(e.type == EXPR_TYPE_CALL);
     struct expr_call *genericCall = e.underlying;
@@ -512,8 +499,7 @@ int main(void) {
     e = expression("a[i](x);");
     assert(e.type == EXPR_TYPE_CALL &&
            ((struct expr_call*)e.underlying)->func.type == EXPR_TYPE_INDEX);
-    e = expression("f[](x);");
-    assert(e.type == EXPR_TYPE_CALL && ((struct expr_call*)e.underlying)->func.type == EXPR_TYPE_INDEX);
+    invalid("f[](x);");
     invalid("f<int,,string>(x);");
     invalid("f<[]>(x);"); invalid("f<int string>(x);");
     invalid("f<int>(;"); invalid("f<int>(x;");

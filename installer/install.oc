@@ -37,7 +37,7 @@ func describe(path string) {
                 case map[string]any:
                     data := object(value);
                     if (text(data["version"]) != "") {
-                        for (_, key := range string[]{"version","commit","commit_date","build_date","install_date"}) io.Println("  ",key,": ",text(data[key]) == "" ? "unknown" : text(data[key]));
+                        for (_, key := range []string{"version","commit","commit_date","build_date","install_date"}) io.Println("  ",key,": ",text(data[key]) == "" ? "unknown" : text(data[key]));
                         return;
                     }
             }
@@ -62,9 +62,9 @@ func entry(path string, content string, whole bool) map[string]any {
 func pathPlan(destination string, system bool) map[string]any {
     plan := make(map[string]any); plan["system"] = system; plan["destination"] = destination;
     binary := pathJoin(destination,"bin"); plan["bin"] = binary;
-    entries := mixed any[]{};
+    entries := mixed []any{};
     if (platform != "windows") {
-        selected := shell(); paths := string[]{}; quote := shQuote(binary);
+        selected := shell(); paths := []string{}; quote := shQuote(binary);
         line := "case \":$PATH:\" in *:" + quote + ":*) ;; *) export PATH=" + quote + ":\"$PATH\" ;; esac";
         if (selected == "fish") line = "fish_add_path --global -- " + quote;
         else if (selected == "csh" || selected == "tcsh") line = "setenv PATH " + quote + ":\"$PATH\"";
@@ -78,7 +78,7 @@ func pathPlan(destination string, system bool) map[string]any {
         } else {
             if (selected == "bash") {
                 login := pathJoin(home(), platform == "macos" ? ".bash_profile" : ".profile");
-                for (_, name := range string[]{".bash_profile",".bash_login",".profile"}) { candidate := pathJoin(home(),name); if (exists(candidate)) { login = candidate; break; } }
+                for (_, name := range []string{".bash_profile",".bash_login",".profile"}) { candidate := pathJoin(home(),name); if (exists(candidate)) { login = candidate; break; } }
                 paths.append(login); paths.append(pathJoin(home(),".bashrc"));
             } else if (selected == "zsh") { base := environment("ZDOTDIR"); if (base == "") base = home(); paths.append(pathJoin(base,".zprofile")); paths.append(pathJoin(base,".zshrc")); }
             else if (selected == "fish") { base := environment("XDG_CONFIG_HOME"); if (base == "") base = pathJoin(home(),".config"); paths.append(pathJoin(base,"fish/conf.d/ocean.fish")); }
@@ -91,7 +91,7 @@ func pathPlan(destination string, system bool) map[string]any {
 }
 func chooseDestination() map[string]any {
     system, user := defaults();
-    for (_, path := range string[]{system,user}) { if (exists(path)) describe(path); }
+    for (_, path := range []string{system,user}) { if (exists(path)) describe(path); }
     installed := exec.LookPath("ocean");
     if (!installed.hasError()) io.Println("Caution: Ocean is already on PATH at ", installed.unwrap());
     io.Println("\n  1. System-wide: ",system,"\n  2. Current user: ",user,"\n  3. Choose a directory");
@@ -146,7 +146,7 @@ func apply(plan map[string]any) {
     scratch := destination + ".install-" + replace(replace(now(),":",""),"-","");
     require(!exists(scratch), "installation staging path already exists"); mkdir(scratch);
     staged := pathJoin(scratch,"new"); backup := pathJoin(scratch,"old"); copyTree(payload,staged);
-    oldRegistry := ""; registryChanged := false; backups := mixed any[]{};
+    oldRegistry := ""; registryChanged := false; backups := mixed []any{};
     saved := false; installed := false; committed := false;
     defer func() { if (committed || !exists(backup)) removeTree(scratch); else io.Println("Previous installation preserved for recovery at ", backup); }();
     defer func() {
@@ -175,7 +175,7 @@ func apply(plan map[string]any) {
             link := exec.Command("test","-L",path); require(link.Run().hasError(),"shell configuration is a symlink: "+path);
             had := exists(path); original := had ? readFile(path) : "";
             file := make(map[string]any); file["path"] = path; file["existed"] = had; file["original"] = original; backups.append(file);
-            missing := string[]{}; at := parent(path);
+            missing := []string{}; at := parent(path);
             for (!exists(at)) { missing.append(at); at = parent(at); }
             mkdir(parent(path)); writeFile(path,editProfile(original,item));
             owner := optionalText(plan,"owner");

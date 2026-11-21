@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix='ocean maps ') as directory:
         empty[3] = "hi";
         value, ok = empty[3];
         if (value != "hi" || !ok) return 2;
-        arrays := map[int]int[]{};
+        arrays := map[int][]int{};
         values, present := arrays[1];
         if (present || len(values) != 0 || len(arrays) != 0) return 3;
         _, present = empty[4];
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix='ocean maps ') as directory:
     }''')
 
     # A missing single-value read is a recoverable Ocean panic, not a trap.
-    program('''func lookup() (int result) {
+    program('''func lookup() (result int) {
         defer func() {
             message := recover();
             if (message != null && message.(string) == "map key does not exist") result = 7;
@@ -163,8 +163,8 @@ func main() int {
         m[1.0] = "updated";
         if (len(m) != 3 || m[1].(string) != "updated") return 1;
         if (m[true].(bool) != false || m["two"].(int) != 2) return 2;
-        m[int[2]{1, 2}] = 5;
-        if (m[int[2]{1, 2}].(int) != 5) return 3;
+        m[[2]int{1, 2}] = 5;
+        if (m[[2]int{1, 2}].(int) != 5) return 3;
         delete(m, "two");
         if (len(m) != 3) return 4;
         return 0;
@@ -188,7 +188,7 @@ func main() int {
         copied := relay<int>(typed); copied["a"] = 3;
         box: any = typed; restored := box.(map[string]int);
         if (restored["a"] != 2 || typed["a"] != 2) return 3;
-        arrays := map[string]int[]{"a": {1, 2}};
+        arrays := map[string][]int{"a": {1, 2}};
         n := 1; pointers := map[string]*int{"a": &n};
         return len(arrays["a"]);
     }''', 2)

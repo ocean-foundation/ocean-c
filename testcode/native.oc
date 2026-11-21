@@ -1,6 +1,6 @@
 package main;
 
-extern int write(i32 fd, buffer<i8>[] data, int count);
+extern int write(i32 fd, buffer<i8> data, int count);
 
 func factorial(n int) int {
     if (n < 2) {

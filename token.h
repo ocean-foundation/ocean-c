@@ -28,7 +28,7 @@ enum tokenType {
     // assignment operators
     TOKEN_SPECIAL_ASSIGN_START, // denotes start of assignment operators
     EQUALS, PLUS_EQUALS, MINUS_EQUALS, STAR_EQUALS, SLASH_EQUALS,
-    MODULO_EQUALS, XOR_EQUALS, TILDE_EQUALS, AMPERSAND_EQUALS, BITWISE_OR_EQUALS,
+    MODULO_EQUALS, XOR_EQUALS, AMPERSAND_EQUALS, BITWISE_OR_EQUALS,
     BITSHIFT_LEFT_EQUALS, BITSHIFT_RIGHT_EQUALS,
     TOKEN_SPECIAL_ASSIGN_END, // denotes end of assignment operators (for purposes of expression parsing)
     // also assignment operators, but carry a different operator precedence so they are not between 1024 and 2048

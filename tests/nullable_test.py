@@ -45,7 +45,7 @@ func main() int {
     if (b == null || b.(Optional.value) != null) return 6;
     nested := Optional<Optional<string>>.value(Optional<string>.none);
     if (nested == null || nested.(Optional.value) != null) return 7;
-    xs := mixed Value[]{null, Box{}};
+    xs := mixed []Value{null, Box{}};
     if (xs[0] != null || xs[1].Get() != 4) return 8;
     m := map[string]Value{"empty":null};
     if (m["empty"] != null) return 9;

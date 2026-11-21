@@ -40,17 +40,17 @@ with tempfile.TemporaryDirectory(prefix="ocean fallthrough ") as directory:
             "func main() int { return choose(false) + choose(true); }", 1, 7)
     program("func i() int {} func b() bool {} func f() float {} func p() *int {}\n"
             "func main() int { if (i() != 0 || b() || f() != 0.0 || p() != zero(*int)) return 1; return 0; }", 4)
-    program("struct Result { n int; text string; items int[]; }\n"
-            "func result() Result {} func values() (int, string, int[]) {}\n"
+    program("struct Result { n int; text string; items []int; }\n"
+            "func result() Result {} func values() (int, string, []int) {}\n"
             "func main() int { r := result(); n, s, xs := values(); "
             "return r.n + len(r.text) + len(r.items) + n + len(s) + len(xs); }", 2)
-    program("func text() string {} func array() int[] {} func fixed() buffer<string>[2] {}\n"
+    program("func text() string {} func array() []int {} func fixed() buffer<string, 2> {}\n"
             "func main() int { a := array(); b := fixed(); "
             "return len(text()) + len(a) + len(b[0]) + len(b[1]); }", 3)
     program("struct Factory<T> {} func (f Factory<T>) make() T {} func make<T>() T {}\n"
             "func main() int { f := Factory<string>{}; s := f.make(); "
             "return make<int>() + len(make<string>()) + len(s); }", 2)
-    program("func named() (int value) { value = 9; }\n"
+    program("func named() (value int) { value = 9; }\n"
             "func main() int { return named(); }", 1)
     program("func arrays(flag bool) string { if (flag) return \"x\"; }\n"
             "func main() int { return len(arrays(true)) + len(arrays(false)); }", 1, 1)
@@ -63,8 +63,8 @@ with tempfile.TemporaryDirectory(prefix="ocean fallthrough ") as directory:
             "func main() int { return a(true) + b() + e(); }", 0, 6)
     program("func a() int { goto done; return 9; done: {} }\n"
             "func b() int { for (;;) { break; } }\n"
-            "func c(xs int[]) int { for (i := range xs) return i; }\n"
-            "func main() int { return a() + b() + c(int[]{}); }", 3)
+            "func c(xs []int) int { for (i := range xs) return i; }\n"
+            "func main() int { return a() + b() + c([]int{}); }", 3)
     program("func a(x any) int { switch (x.(type)) { case int: return 1; } }\n"
             "func b(x any) int { switch (x.(type)) { case int: return 2; default: return 3; } }\n"
             "func c(x any) int { switch (x.(type)) { case int | any: return 4; } }\n"

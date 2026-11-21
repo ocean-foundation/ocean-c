@@ -10,7 +10,7 @@ source_text = '''package main;
 interface Number { int | float }
 interface Integer { ~int }
 interface Text { string }
-interface IntArrays { int[] }
+interface IntArrays { []int }
 interface IntPointer { *int }
 func concatenate(x,y Text) Text { return x+y; }
 func combine(x,y IntArrays) IntArrays { return x+y; }
@@ -59,7 +59,7 @@ func main() int {
     if (exact(alias) != 1 || exact(narrow) != 0 || exact(x) != 0) return 7;
     if (backed(x) != 1 || backed(narrow) != 0) return 8;
     if (concatenate("Ocean", "!").(string) != "Ocean!") return 9;
-    joined := combine(int[]{1,2}, int[]{3}).(int[]);
+    joined := combine([]int{1,2}, []int{3}).([]int);
     if (len(joined)!=3 || joined[2]!=3) return 10;
     if (!samePointer(&alias,&alias)) return 11;
     if (!isArithmetic(Value{2})) return 12;

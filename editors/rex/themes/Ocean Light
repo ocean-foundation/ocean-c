@@ -1,0 +1,26 @@
+# Ocean Light - derived from ocean-foundation/ocean-c editors/helix/themes/ocean-light.toml
+# Import into Rex via Settings -> Themes -> Import Theme File
+
+palette = 0=#182d4d
+palette = 1=#b3261e
+palette = 2=#067d17
+palette = 3=#9a5b13
+palette = 4=#1c5a9e
+palette = 5=#871094
+palette = 6=#00707b
+palette = 7=#d4e2f5
+palette = 8=#788496
+palette = 9=#c93b32
+palette = 10=#19962b
+palette = 11=#b8731f
+palette = 12=#245fbb
+palette = 13=#4b3fa3
+palette = 14=#1f4e79
+palette = 15=#edf3fc
+
+background = #edf3fc
+foreground = #1f2d3d
+cursor-color = #245fbb
+cursor-text = #edf3fc
+selection-background = #c3d6f2
+selection-foreground = #182d4d

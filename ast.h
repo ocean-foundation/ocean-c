@@ -94,7 +94,6 @@ struct stmt_struct {
     char enumPayload; // Private payload layout; explicit any arguments remain concrete.
     struct stmt_enum *enumeration; // Owning enum declaration for reflection.
     char enumStorage; // Private enum representation, excluded from struct reflection.
-    token indexField; // Field delegated to by []; EOF_TOKEN if none is designated.
     size_t nTypeParams;
     typeTokens *typeParamConstraints;
     token *typeParamNames;
@@ -326,7 +325,9 @@ enum literalType {
 struct expr_literal {
     enum literalType type;
     char unsignedLiteral;
+    char singlePrecision; // Literal typed as f32 by its context.
     size_t stringLength;
+    const char *floatSpelling; // Original token text for rounding at the expected precision.
     void *value;
 };
 
@@ -368,7 +369,7 @@ struct expr_slice {
 
 struct expr_index {
     expr parent;
-    expr index; // EXPR_TYPE_NULL denotes access to the delegated collection.
+    expr index;
     token location; // Opening subscript bracket.
     char tryIndex; // Two-binding indexing returns (value, success).
 };

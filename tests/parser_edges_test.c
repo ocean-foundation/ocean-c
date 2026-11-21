@@ -90,13 +90,14 @@ int main(void) {
     assert(sw->nCases == 3 && !sw->cases[0].body.nStmts && !sw->cases[2].body.nStmts);
     e = expression("Point{};");
     assert(e.type == EXPR_TYPE_COMPOSITE && !((struct expr_composite*)e.underlying)->nEntries);
-    valid("type A [-1 + !N]int; type B [~N]int; type C [+N]int;", 3);
+    valid("type A [-1 + !N]int; type B [~N]int;", 2);
+    invalid("type C [+N]int;"); // Ocean expressions have no unary plus.
     invalid("sizeof(x;"); invalid("&;"); invalid("*;"); invalid("!;"); invalid("~;");
     invalid("++;"); invalid("--;"); invalid("a ? b;"); invalid("a ? : b;");
     invalid("if (x := 1; ) {}"); invalid("if (x) {} else +;");
     invalid("for (a, b, c := range xs) {}"); invalid("for (item := range) {}");
     invalid("for (defer) {}"); invalid("defer f();");
-    invalid("func (p Point) M() (int p) {}");
+    invalid("func (p Point) M() (p int) {}");
     invalid("import \"io\""); invalid("import (\"io\", \"math\"");
     invalid("type A [pkg.]int;");
     assert(parseTokens(NULL).hasError);

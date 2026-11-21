@@ -30,4 +30,6 @@ typedef void (*packageCandidateVisitor)(const char *name, const char *path, void
 /* Local and installed packages only; discovery never downloads modules. */
 void visitPackageCandidates(packageBuild *build, packageCandidateVisitor visitor, void *context);
 void freePackage(packageBuild *build);
+/* `ocean fix`: rewrite legacy postfix type syntax in packages (dir, file, or dir/...). */
+int fixPackages(int count, char **locations);
 #endif

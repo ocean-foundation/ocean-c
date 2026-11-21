@@ -16,11 +16,11 @@ func TestLatestSelection(t *testing.T) {
     beta: Release; beta.version="2.0.0-beta";beta.prerelease=true;beta.nightly=true;
     stable: Release;stable.version="1.0.0";stable.stable=true;
     unavailable: Release;unavailable.reason="missing artifact";unavailable.stable=true;unavailable.nightly=true;
-    releases := Release[]{beta,unavailable,stable};
+    releases := []Release{beta,unavailable,stable};
     if (latest(releases,false) != 2 || latest(releases,true) != 0) t.Fatal("channel selection");
-    if (latest(Release[]{beta},false) != -1 || latest(Release[]{stable},true) != -1) t.Fatal("channel fallback");
+    if (latest([]Release{beta},false) != -1 || latest([]Release{stable},true) != -1) t.Fatal("channel fallback");
     beta.stable=true;
-    if (latest(Release[]{beta},false) != -1 || latest(Release[]{unavailable},true) != -1) t.Fatal("unavailable/prerelease stable selection");
+    if (latest([]Release{beta},false) != -1 || latest([]Release{unavailable},true) != -1) t.Fatal("unavailable/prerelease stable selection");
 }
 func TestRedirectsAndDependencyPlans(t *testing.T) {
     if (redirectURL("https://example.com/a/b","/asset") != "https://example.com/asset") t.Fatal("root redirect");
@@ -28,7 +28,7 @@ func TestRedirectsAndDependencyPlans(t *testing.T) {
     if (allowedURL("http://example.com/asset") || !allowedURL("https://example.com/asset")) t.Fatal("download TLS policy");
     if (systemDependencyCommand("apt-get")[0] != "apt-get" || systemDependencyCommand("brew")[2] != "llvm" || len(systemDependencyCommand("not-a-manager")) != 0) t.Fatal("dependency package manager plans");
 }
-func repeated(character i8, count int) string { out := i8[]{};for (i:=0;i<count;i++) out.append(character);return out->string; }
+func repeated(character i8, count int) string { out := []i8{};for (i:=0;i<count;i++) out.append(character);return out->string; }
 func octalField(value int, width int) string {
     text := "";
     for (;;) { digit := value % 8; text = ioDigit(digit) + text; value /= 8; if (value == 0) break; }
@@ -37,16 +37,16 @@ func octalField(value int, width int) string {
 }
 func ioDigit(digit int) string { digits := "01234567"; return digits[digit:digit+1]; }
 func tarFixture(name string, body string, kind i8) string {
-    header: i8[512];
+    header: [512]i8;
     for (i:=0;i<len(name);i++) header[i]=name[i];
     size:=octalField(len(body),12);for(i:=0;i<12;i++)header[124+i]=size[i];
     for(i:=148;i<156;i++)header[i]=' ';
     header[156]=kind;sum:=0;for(_,c:=range header)sum+=(c->u8)->int;
     check:=octalField(sum,8);for(i:=0;i<8;i++)header[148+i]=check[i];
-    bytes:=i8[]{};bytes.append(header...);
+    bytes:=[]i8{};bytes.append(header...);
     return (bytes->string)+body+repeated(0->i8,(512-len(body)%512)%512)+repeated(0->i8,1024);
 }
-func archiveRejected(bytes string, path string) (bool rejected) {
+func archiveRejected(bytes string, path string) (rejected bool) {
     defer func(){ value:=recover();if(value!=null)rejected=true; }();
     unpack(bytes,path,"ocean-c");return;
 }
@@ -69,7 +69,7 @@ func TestOptionalPlanFields(t *testing.T) {
 
 func TestNightlyTagNames(t *testing.T) {
     if (!nightlyTag("nightly-2026.11.15") || !nightlyTag("nightly")) t.Fatal("nightly tag rejected");
-    for (_,tag:=range string[]{"2.0.0-beta","nightly-2026.1.15","nightly-2026.13.15","nightly-2026.11.00","nightly-202x.11.15"}) {
+    for (_,tag:=range []string{"2.0.0-beta","nightly-2026.1.15","nightly-2026.13.15","nightly-2026.11.00","nightly-202x.11.15"}) {
         if (nightlyTag(tag)) t.Fatal("invalid nightly tag accepted");
     }
 }

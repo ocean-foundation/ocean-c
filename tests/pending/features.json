@@ -382,7 +382,7 @@
         },
         {
           "id": "named_results",
-          "source": "func value() (int result) { result = 1; return; }",
+          "source": "func value() (result int) { result = 1; return; }",
           "expected": {
             "ok": true
           }
@@ -474,7 +474,7 @@
       "cases": [
         {
           "id": "substitution",
-          "source": "struct Matrix<T any>(u64 width, height) { data T[height][width]; } type M Matrix<int>(3, 2);",
+          "source": "struct Matrix<T any>(width, height u64) { data T[height][width]; } type M Matrix<int>(3, 2);",
           "expected": {
             "ok": true,
             "facts": {
@@ -499,32 +499,6 @@
           "expected": {
             "ok": false,
             "diagnostic": "value_argument_type"
-          }
-        }
-      ]
-    },
-    {
-      "id": "index_delegation",
-      "stage": "semantic",
-      "reason": "Delegated field existence is checked, but indexability is not.",
-      "syntax": "existing",
-      "cases": [
-        {
-          "id": "not_indexable",
-          "source": "struct Broken { index value int; }",
-          "expected": {
-            "ok": false,
-            "diagnostic": "not_indexable"
-          }
-        },
-        {
-          "id": "element_type",
-          "source": "struct Values { index data []int; } func main() { values: Values; x := values[0]; }",
-          "expected": {
-            "ok": true,
-            "facts": {
-              "x_type": "int"
-            }
           }
         }
       ]

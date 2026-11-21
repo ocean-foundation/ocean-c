@@ -39,10 +39,10 @@ func main() int {
     Println(Sprint(7->i32, (-8)->i16, 9->i8, 1.25->f32));
     Println(sprintFloat(1.999, 2), " ", sprintFloat(-0.125, 3));
     Println(sprintFloat(2.0, -1), " ", sprintFloat(1.25, -1), " ", sprintFloat(2.5, 0));
-    nested := int[]{1, 3}; Println(Sprint(nested));
-    Println(Sprint(mixed any[]{1, "two", true}));
-    Println(Sprint(string[]{"a", "b"}));
-    Println(Sprint(int[][]{{1, 2}, {3}}));
+    nested := []int{1, 3}; Println(Sprint(nested));
+    Println(Sprint(mixed []any{1, "two", true}));
+    Println(Sprint([]string{"a", "b"}));
+    Println(Sprint([][]int{{1, 2}, {3}}));
     c := appendNull("hello"); if (len(c) != 6 || c[5] != 0) return 1;
     return 0;
 }
@@ -55,7 +55,7 @@ func main() int {
         Println(Event.Load, Event.Key(65), Event.Click{2, 3}, Event.Fixed);
         Println(Box<Event>.Value(Event.Key(7)));
         Println(Record{Event.Load});
-        Println(Event[]{Event.Load, Event.Key(1)});
+        Println([]Event{Event.Load, Event.Key(1)});
         Println(Sprintf("event={}", Event.Key(9)).unwrap());
         Println(Optional<int>.value(4), Optional<int>.none);
         return 0;
@@ -63,11 +63,11 @@ func main() int {
 
     # Byte arrays print numeric bytes; strings retain their text identity.
     program(r'''func main() int {
-        bytes := i8[]{1, 5, 3}; Println(bytes);
-        Println(i8[]{}); Println(i8[]{-128, 0, 127});
-        Println("ans"->i8[]); Println("ans");
+        bytes := []i8{1, 5, 3}; Println(bytes);
+        Println([]i8{}); Println([]i8{-128, 0, 127});
+        Println("ans"->[]i8); Println("ans");
         Println(Sprintf("bytes={}", bytes).unwrap());
-        Println(i8[][]{{1, 5}, {3}});
+        Println([][]i8{{1, 5}, {3}});
         if (isString(bytes) || !isString("ans")) return 1;
         return 0;
     }''', '[1, 5, 3]\n[]\n[-128, 0, 127]\n[97, 110, 115]\nans\nbytes=[1, 5, 3]\n[[1, 5] [3]]\n', library=True)
@@ -77,38 +77,38 @@ func main() int {
         Println(Sprint(18446744073709551615->u64, 4294967295->u32, 65535->u16, 255->u8));
         Println(Sprint(0->u64, 0->u32, 0->u16, 0->u8));
         Println(Sprintf("{} {} {} {}", 18446744073709551615->uint, 4294967295->u32, 65535->u16, 255->u8).unwrap());
-        Println(uint[]{0->uint, 18446744073709551615->uint});
+        Println([]uint{0->uint, 18446744073709551615->uint});
         return 0;
     }''', '0 18446744073709551615\n18446744073709551615 4294967295 65535 255\n0 0 0 0\n18446744073709551615 4294967295 65535 255\n[0 18446744073709551615]\n', library=True)
 
     program('''func runtime(n int) array<int> {
-        values: int[n]; for (i := 0; i < n; i++) values[i] = i + 1;
+        values: [n]int; for (i := 0; i < n; i++) values[i] = i + 1;
         return values;
     }
     func main() int {
         Println(true, " ", false);
-        fixed: int[3] = {1, 2, 3}; Println(fixed); Println(runtime(3));
-        empty: int[0]; Println(empty); Println(runtime(0));
-        flags: bool[2] = {true, false}; Println(flags);
-        words: string[2] = {"one", "two"}; Println(words);
-        nested: int[2][2] = {{1, 2}, {3, 4}}; Println(nested);
-        mixedValues: any[3] = {true, "two", 3}; Println(mixedValues);
-        dynamic: int[] = {4, 5}; Println(dynamic.array());
+        fixed: [3]int = {1, 2, 3}; Println(fixed); Println(runtime(3));
+        empty: [0]int; Println(empty); Println(runtime(0));
+        flags: [2]bool = {true, false}; Println(flags);
+        words: [2]string = {"one", "two"}; Println(words);
+        nested: [2][2]int = {{1, 2}, {3, 4}}; Println(nested);
+        mixedValues: [3]any = {true, "two", 3}; Println(mixedValues);
+        dynamic: []int = {4, 5}; Println(dynamic.array());
         Println(Sprintf("{} / {}", false, fixed).unwrap());
         return 0;
     }''', 'true false\n[1 2 3]\n[1 2 3]\n[]\n[]\n[true false]\n[one two]\n[[1 2] [3 4]]\n[true two 3]\n[4 5]\nfalse / [1 2 3]\n', library=True)
 
     program('''struct Empty {}
     struct Child { count int; active bool; }
-    struct Entry { name string; child Child; values int[2]; }
+    struct Entry { name string; child Child; values [2]int; }
     struct Box<T> { value T; }
     func main() int {
         empty := Empty{}; Println(empty);
         child := Child{2, true}; Println(child);
         entry := Entry{"Ada", child, {3, 4}}; Println(entry);
         Println(Box<string>{"generic"});
-        entries: Entry[] = {entry}; Println(entries);
-        fixed: Child[2] = {child, Child{0, false}}; Println(fixed);
+        entries: []Entry = {entry}; Println(entries);
+        fixed: [2]Child = {child, Child{0, false}}; Println(fixed);
         Println(Sprintf("value={}", child).unwrap());
         if (Sprint(entry) != "{name: Ada, child: {count: 2, active: true}, values: [3 4]}") return 1;
         if (entry.name != "Ada" || entry.child.count != 2 || entry.values[0] != 3) return 2;
@@ -118,7 +118,7 @@ func main() int {
     program('''
 func classify(x any) int { switch (y := x.(type)) {
 case i16: return y->int; case f32: return y->int; default: return 99; } }
-extern i32 printf(buffer<i8>[] format, ...);
+extern i32 printf(buffer<i8> format, ...);
 func relay(args ...any) { extern.printf("%d %.1f\\n\\0".data, args...); }
 func main() int {
     a := (-300)->i16; b := a->i32; c := b->i16;
@@ -142,24 +142,24 @@ func main() int {
     return calls;
 }''', status=7)
 
-    # Explicit any[] values remain homogeneous; ...any packs remain mixed.
-    program('''func total(xs any[]) int {
+    # Explicit []any values remain homogeneous; ...any packs remain mixed.
+    program('''func total(xs []any) int {
         result := 0; for (i, x := range xs) result += x.(int); return result;
     }
     func mixedArgs(xs ...any) int { xs[0] = true; return len(xs); }
-    func main() int { a: any[] = int[]{1, 2}; a[0] = 4; a += 3;
-        return total(a) + total(int[]{5, 6}) + mixedArgs(1, "x"); }''', status=22)
+    func main() int { a: []any = []int{1, 2}; a[0] = 4; a += 3;
+        return total(a) + total([]int{5, 6}) + mixedArgs(1, "x"); }''', status=22)
 
     def rejected(body):
         source.write_text('package main; ' + body)
         result = run(compiler, 'build', str(source), '--check')
         assert result.returncode != 0 and 'same type' in result.stderr, result
 
-    rejected('func main() { a := any[]{1, true}; }')
-    rejected('func main() { a := any[]{1->i16, 2->i32}; }')
-    for body in ('a := any[]{1, 2}; a[0] = true;',
-                 'a := any[]{1}; a += true;',
-                 'x: any = true; a := any[]{1, x};'):
+    rejected('func main() { a := []any{1, true}; }')
+    rejected('func main() { a := []any{1->i16, 2->i32}; }')
+    for body in ('a := []any{1, 2}; a[0] = true;',
+                 'a := []any{1}; a += true;',
+                 'x: any = true; a := []any{1, x};'):
         source.write_text('package main; func main() { ' + body + ' }')
         result = run(compiler, 'build', str(source), '-o', str(exe))
         assert result.returncode == 0, result.stderr
@@ -167,14 +167,14 @@ func main() int {
         assert result.returncode != 0, body
 
     program('''func inspect(x any) int { switch (xs := x.(type)) {
-        case any[]: return len(xs); default: return 10; } }
-    func main() int { return inspect(int[]{1, 2}) + inspect(bool[]{true}) + inspect(3); }''', status=13)
-    program('''func main() int { x: f32 = 1.5; y: i16 = -3; ++x; ++y;
+        case []any: return len(xs); default: return 10; } }
+    func main() int { return inspect([]int{1, 2}) + inspect([]bool{true}) + inspect(3); }''', status=13)
+    program('''func main() int { x: f32 = 1.5->f32; y: i16 = -3; ++x; ++y;
         if (x != 2.5 || y != -2 || zero(f32) != 0.0) return 1;
-        a := f32[]{x, -x}; return (a[0] - a[1])->int; }''', status=5)
+        a := []f32{x, -x}; return (a[0] - a[1])->int; }''', status=5)
 
-    program('''func make() any[] { return int[]{2, 3}; }
-    func main() int { a := make(); a = int[]{4, 5}; return a[1].(int); }''', status=5)
+    program('''func make() []any { return []int{2, 3}; }
+    func main() int { a := make(); a = []int{4, 5}; return a[1].(int); }''', status=5)
 
     source.write_text('package main;\nfunc need(x int) int { return x; }\n'
                       'func main() int { x: any = 3; return need(x); }\n')

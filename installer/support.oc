@@ -33,8 +33,8 @@ func trim(text string) string {
     for (end > start && text[end - 1] <= 32) end--;
     return text[start:end];
 }
-func split(text string, separator string) string[] {
-    result := string[]{};
+func split(text string, separator string) []string {
+    result := []string{};
     for (;;) { at := index(text, separator); if (at < 0) break; result.append(text[:at]); text = text[at+len(separator):]; }
     result.append(text); return result;
 }
@@ -57,12 +57,12 @@ func ps(script string) string {
 }
 func environment(name string) string {
     if (platform == "windows") return ps("[Environment]::GetEnvironmentVariable(" + psQuote(name) + ")");
-    bytes := (name + "\0") -> i8[]; raw := extern.getenv(bytes.data); result := i8[]{};
+    bytes := (name + "\0") -> []i8; raw := extern.getenv(bytes.data); result := []i8{};
     if ((raw -> int) != 0) { for (i := 0; raw[i] != 0; i++) result.append(raw[i]); }
     return result -> string;
 }
 func ask(message string, fallback string) string {
-    io.Print(message).unwrap(); bytes := i8[]{};
+    io.Print(message).unwrap(); bytes := []i8{};
     for (;;) {
         require(extern.ocean_process_interrupted() == 0, "installation cancelled");
         character := extern.getchar();
@@ -108,7 +108,7 @@ func copyTree(source string, destination string) {
 }
 func readFile(path string) string {
     f := os.Open(path, os.FileMode.Binary).unwrap(); defer f.Close();
-    bytes := i8[]{}; bytes.append(f.Readend().unwrap()...); return bytes -> string;
+    bytes := []i8{}; bytes.append(f.Readend().unwrap()...); return bytes -> string;
 }
 func writeFile(path string, text string) { f := os.Open(path, os.FileMode.BinaryWrite).unwrap(); defer f.Close(); f.Write(text).unwrap(); }
 func temporary() string {
@@ -123,6 +123,6 @@ func object(value any) map[string]any { return value.(map[string]any); }
 func text(value any) string { switch (value.(type)) { case string: return value.(string); default: return ""; } }
 func optionalText(values map[string]any, key string) string { value, _ := values[key]; return text(value); }
 func flag(value any) bool { switch (value.(type)) { case bool: return value.(bool); default: return false; } }
-func array(value any) mixed any[] { return value.(mixed any[]); }
+func array(value any) mixed []any { return value.(mixed []any); }
 func encode(value any) string { return json.Marshal(value).unwrap(); }
 func decode(value string) any { return json.Unmarshal(value).unwrap(); }

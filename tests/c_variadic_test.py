@@ -71,24 +71,24 @@ func narrowRelay(values ...any) i16 {
 func relay(pointer *int, values ...any) float {
     return extern.mixed_args(-3->i8, 1.5, pointer, 4->i32, values...);
 }
-func emptyAfter(value *int, calls *int) int[] {
+func emptyAfter(value *int, calls *int) []int {
     (*value)++;
     (*calls)++;
-    return int[0];
+    return [0]int;
 }
 func main() int {
     x := 9;
     if (relay(&x, -7->i8, 5000000000, 2.5, &x) != 8.5) return 1;
     if (narrowRelay((-7)->i16, 2.5->f32) != -1234) return 10;
     if (extern.narrow_fixed((-300)->i16, 1.25->f32, 2->i32, (-7)->i16, 2.5->f32) != -1234) return 11;
-    empty := int[0];
+    empty := [0]int;
     if (extern.single_result(0->i32, empty...)->float != 1.25) return 12;
     if (extern.byte_result(0->i32, empty...) != -7) return 2;
     if (extern.int_result(0->i32, empty...) != -17) return 3;
     if (extern.wide_result(0->i32, empty...) != 5000000000) return 4;
     if (!extern.bool_result(0->i32, empty...)) return 5;
     if (*extern.pointer_result(0->i32, empty...) != 42) return 6;
-    flags: bool[] = {true};
+    flags: []bool = {true};
     extern.mutate(&x, flags...);
     if (x != 1) return 7;
     // Repeated dynamic calls release temporary argument storage.
