@@ -683,6 +683,9 @@ one array to get an `int` element difference. Arithmetic has no bounds checks
 and traps on `null`. `ip: *int = 5;` and `ip := 5->(*int);` both initialize the
 pointer to address `0x5`. Use an explicit cast for integer addresses in
 reassignments and function arguments, as in `ip = 5->(*int)` or `f(5->(*int))`.
+A sized buffer casts to its storage address (`st: buffer<i8, 256>; a := st->int;`
+or `st->(*int)`), and an integer address casts directly to a view, as in
+`f((a + 19)->(buffer<i8>))` or `(a + 48)->(buffer<i8, 4>)`.
 `new(T)` returns an explicitly managed `*T` initialized to `zero(T)`;
 `free(pointer)` releases owned contents and the allocation, without following
 pointer fields. Pointer scope exit never frees the pointee. `free(items)` can

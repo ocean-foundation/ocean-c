@@ -4673,9 +4673,14 @@ static Value expressionImpl(Backend *b, expr *e) {
         Value a;
         if (from && !from->shape && from->fixedArray && wanted && wanted->shape == 3) {
             a = arrayData(b, expression(b, &v->child));
-        } else if (from && !from->shape && wanted && (wanted->shape == 3 || !wanted->shape || wanted->fixedArray))
+        } else if (from && !from->shape && ((wanted && (wanted->shape == 3 || !wanted->shape || wanted->fixedArray)) ||
+                   (!from->fixedArray && (integral(b, target) || target == RAW_POINTER || (wanted && wanted->shape == 6)))))
+            // A sized buffer converts to a pointer or integer as its storage address (§7.5).
             a = value(b, pointerBufferKind(b, from->element), "%s", materialize(b, &v->child).operand);
         else a = expression(b, &v->child);
+        // An integer address must become a pointer before it can back a buffer view.
+        if (integral(b, a.kind) && wanted && (wanted->shape == 3 || (!wanted->shape && !wanted->fixedArray)))
+            a = convert(b, a, pointerBufferKind(b, wanted->element));
         typeTokens element, dimension;
         if (wanted && (bufferTypeParts(v->type, &element, &dimension) ||
                        sizedArrayTypeParts(v->type, &element, &dimension))) {
