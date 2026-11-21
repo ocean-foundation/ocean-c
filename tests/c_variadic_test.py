@@ -29,6 +29,14 @@ int16_t narrow_fixed(int16_t x, float f, int count, ...) {
     va_end(ap); return -1234;
 }
 float single_result(int count, ...) { return 1.25f; }
+// Narrow fixed parameters after six register-sized ones spill to the stack.
+int stack_narrow(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f,
+                 int8_t g, int16_t h, uint8_t i, int count, ...) {
+    if (a + b + c + d + e + f != 21 || g != -5 || h != -300 || i != 200 || count != 1) abort();
+    va_list ap; va_start(ap, count);
+    int extra = va_arg(ap, int);
+    va_end(ap); return extra;
+}
 
 double mixed_args(int8_t small, double fixed, void *pointer, int count, ...) {
     if (small != -3 || fixed != 1.5 || !pointer || count != 4) abort();
@@ -65,6 +73,12 @@ extern *int pointer_result(i32 count, ...);
 extern void mutate(*int p, ...);
 extern i16 narrow_fixed(i16 x, f32 f, i32 count, ...);
 extern f32 single_result(i32 count, ...);
+extern i32 stack_narrow(int a, int b, int c, int d, int e, int f, varint(8) g, varint(16) h,
+                        varuint(8) i, i32 count, ...);
+func stackRelay(values ...any) i32 {
+    return extern.stack_narrow(1, 2, 3, 4, 5, 6, (-5)->varint(8), (-300)->varint(16), 200->varuint(8),
+                               1->i32, values...);
+}
 func narrowRelay(values ...any) i16 {
     return extern.narrow_fixed((-300)->i16, 1.25->f32, 2->i32, values...);
 }
@@ -80,6 +94,7 @@ func main() int {
     x := 9;
     if (relay(&x, -7->i8, 5000000000, 2.5, &x) != 8.5) return 1;
     if (narrowRelay((-7)->i16, 2.5->f32) != -1234) return 10;
+    if (stackRelay(77->i32) != 77) return 13;
     if (extern.narrow_fixed((-300)->i16, 1.25->f32, 2->i32, (-7)->i16, 2.5->f32) != -1234) return 11;
     empty := [0]int;
     if (extern.single_result(0->i32, empty...)->float != 1.25) return 12;
@@ -102,6 +117,13 @@ func main() int {
 ''')
     ir, obj, exe = root / "main.ll", root / "native.o", root / "program"
     run(compiler, "build", "--emit-llvm", "-o", str(ir), str(source))
+    # Fixed varint(8)/varint(16)/varuint(8) parameters use the 8- and 16-bit libffi descriptors
+    # (I8 = 6, I16 = 10, U8 = 15), not the promoted int32 one, in runtime-expanded calls.
+    text = ir.read_text()
+    relay = text[text.index('define i32 @"ocean.__pkg0_stackRelay"'):]
+    relay = relay[:relay.index("\n}\n")]
+    for kind in (6, 10, 15):
+        assert f"@__ocean.c.fixed.{kind}" in relay, ("narrow fixed descriptor", kind)
     run(clang, "-c", str(native), "-o", str(obj))
     for optimization in ("-O0", "-O2"):
         run(clang, optimization, "-Wno-override-module", "-x", "ir", str(ir),

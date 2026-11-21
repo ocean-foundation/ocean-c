@@ -98,3 +98,6 @@ func main() int {
     ):
         check(body, 'C has no')
     check('extern i32 abs(varint(32) x); extern varuint(64) h(varint(8) a, varuint(16) b); func main() {}')
+    # Widths above 64 bits are rejected in extern signatures even if never called.
+    check('extern varint(65) f(); func main() {}', 'C has no 65-bit integer type')
+    check('type W = varuint(128); extern void g(W x); func main() {}', 'C has no 128-bit integer type')

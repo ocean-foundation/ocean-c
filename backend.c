@@ -2032,6 +2032,12 @@ static Value boxScalar(Backend *b, Value v, int promote) {
 // Fixed C parameters retain their declared ABI rather than vararg promotion.
 static Value boxFixedCScalar(Backend *b, Value v) {
     v.kind = representationKind(b, v.kind);
+    // varint(8|16) and varuint(8|16) have the same IR type and C layout as the
+    // fixed kinds, so describe them to libffi at their declared width too.
+    unsigned parameterized = parameterizedIntegerWidth(v.kind);
+    if (parameterized == 8 || parameterized == 16)
+        v.kind = parameterized == 8 ? (unsignedInteger(b, v.kind) ? U8 : I8)
+                                    : (unsignedInteger(b, v.kind) ? U16 : I16);
     if (v.kind != F32 && v.kind != I16 && v.kind != I8 && v.kind != U8 && v.kind != U16 && v.kind != BOOL)
         return boxScalar(b, v, 0);
     b->ffiUsed = 1;

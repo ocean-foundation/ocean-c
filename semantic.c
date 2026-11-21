@@ -257,13 +257,13 @@ static int integerShape(Type *t, int *isUnsigned) {
     if (!strcmp(name, "i32") || !strcmp(name, "u32")) return 32;
     return 64;
 }
-// C has no integer type narrower than 64 bits other than 8, 16, and 32, so an
-// extern signature cannot use varint(n)/varuint(n) at another width (including
-// through a defined type or alias). Wider values are rejected at calls.
+// C integers are 8, 16, 32, or 64 bits wide, so an extern signature cannot use
+// varint(n)/varuint(n) at any other width, including through a defined type or
+// alias and including widths above 64 bits.
 static void checkExternIntegerWidth(Context *c, Type *t, token at, const char *what) {
     while (t->underlying) t = t->underlying;
     int isUnsigned = 0, width = t->varintBits ? integerShape(t, &isUnsigned) : 0;
-    if (!width || width > 64 || width == 8 || width == 16 || width == 32 || width == 64) return;
+    if (!width || width == 8 || width == 16 || width == 32 || width == 64) return;
     char message[192];
     snprintf(message, sizeof(message),
              "C has no %d-bit integer type: an extern %s must be 8, 16, 32, or 64 bits wide; "
@@ -281,7 +281,9 @@ static Type *sizedInteger(Context *c, unsigned width, int isUnsigned) {
 }
 static Type *commonIntegerType(Context *c, Type *a, Type *b, token at) {
     int au, bu, aw = integerShape(a, &au), bw = integerShape(b, &bu);
-    if (aw == bw && au == bu) return a;
+    // Only identical types keep their own type. Distinct types of one width
+    // (varint(32) and i32) follow the mixed-width rule, matching the backend.
+    if (identicalTypes(a, b)) return a;
     unsigned width = aw > bw ? aw : bw;
     if (au == bu) return sizedInteger(c, width < 64 ? 64 : width, au);
     unsigned unsignedWidth = au ? aw : bw, signedWidth = au ? bw : aw;
