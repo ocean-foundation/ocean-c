@@ -279,20 +279,47 @@ static Type *sizedInteger(Context *c, unsigned width, int isUnsigned) {
     char *name = allocate(c, 32); snprintf(name, 32, "%s(%u)", isUnsigned ? "varuint" : "varint", width);
     result->name = result->spelling = name; return result;
 }
+// varint(n)/varuint(n), directly or through an alias (defined types never mix).
+static int parameterizedInteger(Type *t) { return t->varintBits != 0; }
+// The standard integer type of a width: the fixed i8/u8 ... int/uint types at
+// 8, 16, 32, and 64 bits, otherwise varint(width)/varuint(width).
+static Type *canonicalInteger(Context *c, unsigned width, int isUnsigned) {
+    if (width == 8 || width == 16 || width == 32) {
+        Type *t = allocate(c, sizeof(*t));
+        *t = integer;
+        char *name = allocate(c, 8);
+        snprintf(name, 8, "%c%u", isUnsigned ? 'u' : 'i', width);
+        t->spelling = name; t->semanticBase = &integer;
+        return t;
+    }
+    return sizedInteger(c, width, isUnsigned);
+}
+// Integer operator results (§9.2). Identical types keep their type. With one
+// signedness, the wider operand's type wins (i32 + i16 is i32); distinct types
+// of one width give the standard type of that width. Mixed signedness gives a
+// signed type of the wider width (i64 + u64 is i64, i8 + u32 is i32); only when
+// both operands are varint/varuint does it grow to hold both ranges, with
+// max(signed width, unsigned width + 1) bits (varint(64) + varuint(64) is
+// varint(65), varint(64) + varuint(63) is varint(64)). The signed operand keeps
+// its own type when it already has the result width. The backend's
+// commonIntegerKind applies the same rule.
 static Type *commonIntegerType(Context *c, Type *a, Type *b, token at) {
     int au, bu, aw = integerShape(a, &au), bw = integerShape(b, &bu);
-    // Only identical types keep their own type. Distinct types of one width
-    // (varint(32) and i32) follow the mixed-width rule, matching the backend.
     if (identicalTypes(a, b)) return a;
-    unsigned width = aw > bw ? aw : bw;
-    if (au == bu) return sizedInteger(c, width < 64 ? 64 : width, au);
-    unsigned unsignedWidth = au ? aw : bw, signedWidth = au ? bw : aw;
-    if (unsignedWidth < 64 && width <= 64) return &integer;
-    if (width <= 64 || unsignedWidth >= OCEAN_MAX_INTEGER_BITS) {
-        error(c, at, "mixed signed and unsigned integers require an explicit -> cast"); return &unknown;
+    if (au == bu) {
+        if (aw != bw) return aw > bw ? a : b;
+        return canonicalInteger(c, (unsigned)aw, au);
     }
-    if (signedWidth <= unsignedWidth) width = unsignedWidth + 1;
-    return sizedInteger(c, width, 0);
+    unsigned unsignedWidth = au ? aw : bw, signedWidth = au ? bw : aw;
+    unsigned width = signedWidth > unsignedWidth ? signedWidth : unsignedWidth;
+    if (parameterizedInteger(a) && parameterizedInteger(b) && unsignedWidth >= signedWidth)
+        width = unsignedWidth + 1;
+    if (width == signedWidth) return au ? b : a;
+    if (width > OCEAN_MAX_INTEGER_BITS) {
+        error(c, at, "mixed signed and unsigned integers need a result wider than 8388608 bits; use an explicit -> cast");
+        return &unknown;
+    }
+    return canonicalInteger(c, width, 0);
 }
 static int integerFits(Type *expected, Type *actual) {
     int eu, au;
@@ -1091,7 +1118,11 @@ static typeTokens numericTypeSpan(Type *type, token at) {
         span.tokens[0].type = type->varintUnsigned ? VARUINT : VARINT;
         span.tokens[0].lexeme = type->varintUnsigned ? "varuint" : "varint";
         span.tokens[1].type = LEFT_PAREN; span.tokens[1].lexeme = "(";
-        span.tokens[2].type = LITERAL_INT; span.tokens[2].lexeme = "<width>";
+        // The spelled width appears when the span is printed (e.g. in type lists).
+        char *width = malloc(16);
+        if (!width) exit(1);
+        snprintf(width, 16, "%u", type->varintBits);
+        span.tokens[2].type = LITERAL_INT; span.tokens[2].lexeme = width;
         span.tokens[2].numValue.integer = type->varintBits;
         span.tokens[3].type = RIGHT_PAREN; span.tokens[3].lexeme = ")";
     }
@@ -2023,9 +2054,7 @@ static Type *operatorResult(Context *c, enum binaryExprType op, Type *a, Type *b
         int comparison = op >= EXPR_EQUALITY && op <= EXPR_GREATER_EQUALS;
         if (!arithmetic && !comparison && !(integral && !isFloat)) return NULL;
         int au, bu, aw = integerShape(a, &au), bw = integerShape(b, &bu);
-        if (!isFloat && aw && bw && au != bu &&
-            (((aw <= 64 && bw <= 64) && (au ? aw : bw) == 64) ||
-             (au ? aw : bw) >= OCEAN_MAX_INTEGER_BITS)) return NULL;
+        if (!isFloat && aw && bw && au != bu && (au ? aw : bw) >= OCEAN_MAX_INTEGER_BITS) return NULL;
         Type *floatResult = floatOperatorType(a, b);
         // Integer pairs follow the same result rule as concrete operands (§9.2);
         // invalid mixed-sign pairs were rejected above.
@@ -2598,9 +2627,8 @@ static Type *expression(Context *c, expr *e) {
             }
             int au, bu;
             int numericPair = integerShape(a, &au) && integerShape(b, &bu);
-            if (numericPair && au != bu && (au ? integerShape(a, &au) : integerShape(b, &bu)) == 64 && integerShape(a, &au) <= 64 && integerShape(b, &bu) <= 64)
-                error(c, at, "mixed signed and unsigned integers require an explicit -> cast");
-            else if (!numericPair && !equalityCompatible(a, b)) check(c, a, b, at);
+            if (numericPair) commonIntegerType(c, a, b, at); // Reports widths beyond the maximum.
+            else if (!equalityCompatible(a, b)) check(c, a, b, at);
             return &boolean;
         }
         enum binaryExprType pointerOp = baseOperation(v->operation);
@@ -2667,10 +2695,11 @@ static Type *expression(Context *c, expr *e) {
         }
         Type *integerResult = NULL;
         int au, bu, aw = integerShape(a, &au), bw = integerShape(b, &bu);
-        int stores = v->operation == EXPR_ASSIGNMENT ||
-                     (v->operation >= EXPR_ADD_EQUALS && v->operation <= EXPR_BITWISE_OR_EQUALS);
-        if (aw && bw && !stores) {
+        int compound = v->operation >= EXPR_ADD_EQUALS && v->operation <= EXPR_BITWISE_OR_EQUALS;
+        if (aw && bw && v->operation != EXPR_ASSIGNMENT) {
             integerResult = commonIntegerType(c, a, b, at);
+            // x op= y is valid only when x op y is, and its result fits x's type.
+            if (compound && integerResult != &unknown) check(c, a, integerResult, at);
         }
         if (recreated) recreated->freed = 0;
 

@@ -1566,9 +1566,11 @@ above `UINT64_MAX` infer a minimally wide `varuint`; an explicit type such as
 `value: varuint(256) = 340282366920938463463374607431768211456;` selects a stable
 width. Negative large literals infer a fitting signed width. Ordinary `int` and
 `uint` remain 64-bit. Unsigned integers use unsigned division, remainder,
-comparisons, and logical right shifts. Mixed-width operations retain at least
-64 bits and larger operand widths; wide mixed-sign operations use a signed
-width covering both ranges. Narrowing casts truncate; widening sign-extends or
+comparisons, and logical right shifts. Mixed-width operations take the wider
+operand's type (`i32 + i16` is `i32`); mixed signedness gives a signed type of
+the wider width (`i64 + u64` is `i64`) and grows to cover both ranges only when
+both operands are `varint`/`varuint` (`varint(64) + varuint(64)` is
+`varint(65)`). `x op= y` requires `x op y` to be valid and assignable to `x`. Narrowing casts truncate; widening sign-extends or
 zero-extends according to the source signedness. Wide integers support named
 types, arrays, boxing, and reflection. Boxed values above 64 bits use owned heap
 storage. C scalar calls require an explicit cast to at most 64 bits or a pointer

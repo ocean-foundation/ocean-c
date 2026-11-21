@@ -1675,20 +1675,34 @@ static Kind promotedScalarKind(Backend *b, Kind kind) {
 }
 // Mixed-width arithmetic retains at least 64 bits and both operand ranges.
 // Existing signed/u64 pairs still require an explicit cast at widths <= 64.
-static Kind commonIntegerKind(Backend *b, Kind a, Kind c) {
-    unsigned aw = integerWidth(b, a), cw = integerWidth(b, c);
-    unsigned width = aw > cw ? aw : cw;
-    int au = unsignedInteger(b, a), cu = unsignedInteger(b, c);
-    if (width <= 64) {
-        if (au && cu) return UINT;
-        if (!au && !cu) return INT;
-        return (au ? aw : cw) < 64 ? INT : UINT;
+// Mirrors the checker's commonIntegerType (§9.2): identical kinds stay; one
+// signedness takes the wider operand (equal widths: the standard kind); mixed
+// signedness takes a signed kind of the wider width, growing to
+// max(signed width, unsigned width + 1) bits only when both are varint/varuint,
+// and keeps the signed operand's kind when it already has the result width.
+static Kind canonicalIntegerKind(unsigned width, int isUnsigned) {
+    switch (width) {
+    case 8: return isUnsigned ? U8 : I8;
+    case 16: return isUnsigned ? U16 : I16;
+    case 32: return isUnsigned ? U32 : I32;
+    case 64: return isUnsigned ? UINT : INT;
+    default: return (Kind)((isUnsigned ? VARUINT_BASE : VARINT_BASE) + width);
     }
-    if (au == cu) return (Kind)((au ? VARUINT_BASE : VARINT_BASE) + width);
-    unsigned uw = au ? aw : cw, sw = au ? cw : aw;
-    if (sw <= uw) width = uw + 1;
+}
+static Kind commonIntegerKind(Backend *b, Kind a, Kind c) {
+    if (a == c) return a;
+    unsigned aw = integerWidth(b, a), cw = integerWidth(b, c);
+    int au = unsignedInteger(b, a), cu = unsignedInteger(b, c);
+    if (au == cu) {
+        if (aw != cw) return aw > cw ? a : c;
+        return canonicalIntegerKind(aw, au);
+    }
+    unsigned uw = au ? aw : cw, sw = au ? cw : aw, width = sw > uw ? sw : uw;
+    if (parameterizedIntegerWidth(representationKind(b, a)) && parameterizedIntegerWidth(representationKind(b, c)) && uw >= sw)
+        width = uw + 1;
+    if (width == sw) return au ? c : a;
     if (width > OCEAN_MAX_INTEGER_BITS) { fail(b, "mixed integer width exceeds LLVM maximum; use an explicit cast"); return BAD; }
-    return (Kind)(VARINT_BASE + width);
+    return canonicalIntegerKind(width, 0);
 }
 static int implicitVoidPointer(Backend *b, Kind source, Kind target) {
     BufferKind *from = bufferKind(b, source), *to = bufferKind(b, target);

@@ -408,11 +408,16 @@ value: varuint(128) = 340282366920938463463374607431768211455;
 count := 340282366920938463463374607431768211456->Counter;
 ```
 
-Signed widening sign-extends and unsigned widening zero-extends. Mixed-width
-integer arithmetic uses at least 64 bits and retains larger operand widths.
-When a wide operation mixes signed and unsigned operands, its signed result
-has enough bits for both ranges; an explicit cast is required if that would
-exceed the maximum. Existing mixed-sign rules for operands up to 64 bits remain.
+Signed widening sign-extends and unsigned widening zero-extends. Integer arithmetic on identical types keeps that type. With one signedness the
+wider operand's type wins (`i32 + i16` is `i32`, `u16 + u8` is `u16`); distinct
+types of one width give the standard type (`varint(32) + i32` is `i32`). Mixed
+signedness gives a signed type of the wider width (`i64 + u64` is `i64`,
+`i8 + u32` is `i32`); only when both operands are `varint`/`varuint` does it grow
+to hold both ranges (`varint(64) + varuint(64)` is `varint(65)`,
+`varint(64) + varuint(63)` is `varint(64)`). Results wrap at their width.
+Fitting literals use the other operand's type. `x op= y` is valid only when
+`x op y` is and its result is assignable to `x` (`i32 += i16` works,
+`u8 += u16` does not).
 Boxed values wider than 64 bits use owned heap storage and retain their exact
 type and value through copies, containers, and reflection. Very large widths
 can require substantial compilation time and memory; native lowering also
@@ -455,10 +460,16 @@ initializers, assignments, returns, and collection elements. Fitting integer
 literals may directly initialize or supply narrower types (`small: i8 = 42`);
 integer expressions and variables are checked by type, not their current value.
 Pointer and collection element storage types must match; scalar widening does
-not convert an `[]i8` into an `[]i32`. Mixed-width integer arithmetic uses at least 64 bits and preserves larger widths;
-fitting literals use the other operand's type. Operands up to 64 bits retain
-the existing mixed-sign cast requirements; wide mixed-sign operations use a
-signed type large enough for both ranges.
+not convert an `[]i8` into an `[]i32`. Integer arithmetic on identical types keeps that type. With one signedness the
+wider operand's type wins (`i32 + i16` is `i32`, `u16 + u8` is `u16`); distinct
+types of one width give the standard type (`varint(32) + i32` is `i32`). Mixed
+signedness gives a signed type of the wider width (`i64 + u64` is `i64`,
+`i8 + u32` is `i32`); only when both operands are `varint`/`varuint` does it grow
+to hold both ranges (`varint(64) + varuint(64)` is `varint(65)`,
+`varint(64) + varuint(63)` is `varint(64)`). Results wrap at their width.
+Fitting literals use the other operand's type. `x op= y` is valid only when
+`x op y` is and its result is assignable to `x` (`i32 += i16` works,
+`u8 += u16` does not).
 
 Integer literals (including negative literals) automatically convert in float contexts,
 including typed initializers, assignments, arguments, returns, arithmetic, and

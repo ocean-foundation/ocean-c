@@ -88,28 +88,29 @@ func main() int {
         'func f(x []varuint(4)) {} func main() { x: []varint(4) = {}; f(x); }',
     ):
         check(body, 'type mismatch')
-    # Type-list operands use the same result rule as concrete operands: unsigned
-    # pairs of at most 64 bits give uint, and pairs that disagree stay a type list.
+    # Type-list operands use the same result rule as concrete operands: when every
+    # member pair agrees (varuint(16), u32) the result is that one type, which here
+    # widens into the declared uint result.
     program('''func add(a varuint(4) | varuint(8), b varuint(16)) uint { return a + b; }
 func small(a u8 | u16, b u32) uint { return a * b; }
 func main() int {
     if (add(3->varuint(4), 4->varuint(16)) != 7 || add(200->varuint(8), 1->varuint(16)) != 201) return 1;
     if (small(2->u8, 5->u32) != 10) return 2;
     return 0; }''')
-    # When member results differ, the result is the list of those results (uint|int),
+    # When member results differ, the result is the list of those results (varuint(16)|varint(17)),
     # not the operand's list, so every runtime value is one of its terms.
     check('func mix(a varuint(4) | varint(8), b varuint(16)) { z: string = a + b; } func main() {}',
-          'got uint|int')
+          'got varuint(16)|varint(17)')
     check('func mix(a varuint(4) | varint(8), b varuint(16)) varuint(4) | varint(8) { return a + b; } func main() {}',
-          'expected varuint(4)|varint(8), got uint|int')
-    program('''func mix(a varuint(4) | varint(8), b varuint(16)) uint | int { return a + b; }
-func kind(r uint | int) int { switch (r.(type)) { case uint: return 1; case int: return 2; } return 0; }
+          'expected varuint(4)|varint(8), got varuint(16)|varint(17)')
+    program('''func mix(a varuint(4) | varint(8), b varuint(16)) varuint(16) | varint(17) { return a + b; }
+func kind(r varuint(16) | varint(17)) int { switch (r.(type)) { case varuint(16): return 1; case varint(17): return 2; } return 0; }
 func main() int {
-    if (kind(mix(15->varuint(4), 65535->varuint(16))) != 1 || mix(15->varuint(4), 65535->varuint(16)).(uint) != 65550) return 1;
-    if (kind(mix((-3)->varint(8), 5->varuint(16))) != 2 || mix((-3)->varint(8), 5->varuint(16)).(int) != 2) return 2;
+    if (kind(mix(15->varuint(4), 65520->varuint(16))) != 1 || mix(15->varuint(4), 65520->varuint(16)).(varuint(16)) != 65535) return 1;
+    if (kind(mix((-3)->varint(8), 5->varuint(16))) != 2 || mix((-3)->varint(8), 5->varuint(16)).(varint(17)) != 2) return 2;
     return 0; }''')
-    # Compound assignment converts the operand to the destination type and operates
-    # there: it accepts any operand assignable to the destination, unlike x = x op y.
+    # x op= y is valid exactly when x op y is and its result fits x: the result of
+    # each operation below is x's own type (or narrower), and it wraps at that width.
     program('''func main() int {
     w: varuint(8) = 255; u: u8 = 1; w += u;
     x: i32 = 2147483647; y: i16 = 1; x += y;
@@ -118,6 +119,9 @@ func main() int {
     s: varint(6) = -32; s -= 1;
     if (w != 0 || x != -2147483648 || d != 28 || m != 0 || s != 31) return 1;
     return 0; }''')
-    check('func main() { w: varuint(8) = 255; u: u8 = 1; w = w + u; }', 'expected varuint(8), got uint')
+    check('func main() { w: varuint(8) = 255; u: u8 = 1; w = w + u; }')
+    check('func main() { x: u8 = 1; y: u16 = 2; x += y; }', 'expected u8, got u16')
+    check('func main() { x: varint(64) = 1; y: varuint(64) = 2; x += y; }', 'expected varint(64), got varint(65)')
+    check('func main() { x: int = 1; y: uint = 2; x += y; z: int = x + y; }')
     check('func main() { s: varint(6) = 1; t: i8 = 1; s -= t; }', 'expected varint(6), got i8')
     check('func main() { x: i8 = 1; y: i32 = 2; x += y; }', 'expected i8, got i32')

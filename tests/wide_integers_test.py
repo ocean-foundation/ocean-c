@@ -163,12 +163,13 @@ func main() int {
     assert result.returncode == 0 and time.time() - started < 20, (result.stderr, time.time() - started)
     rejected('func main() { x := 1' + '0' * 2525223 + '; }', 'exceeding 8388608 bits')
 
-    # Only identical types keep their own type; distinct types of one width follow the
-    # mixed-width rule symmetrically, and the analyzed type matches the boxed runtime type.
+    # Identical types keep their type; one signedness takes the wider operand (equal widths:
+    # the standard type); mixed signedness grows only when both are varint/varuint. The
+    # analyzed type matches the boxed runtime type.
     program('''func main() int {
     w8: varuint(8) = 5; u: u8 = 6; v32: varint(32) = 1; i: i32 = 2; s100: varint(100) = -7; u128: varuint(128) = 8;
     a: any = w8 + u; b: any = i + v32; c: any = w8 + w8; d: any = s100 + u128; e: any = u128 + s100;
-    if (a.(uint) != 11 || b.(int) != 3 || c.(varuint(8)) != 10) return 1;
+    if (a.(u8) != 11 || b.(i32) != 3 || c.(varuint(8)) != 10) return 1;
     if (d.(varint(129)) != 1 || e.(varint(129)) != 1) return 2;
     return 0; }''')
-    rejected('func main() { w8: varuint(8) = 5; u: u8 = 6; x: varuint(8) = w8 + u; }', 'type mismatch')
+    rejected('func main() { w8: varuint(8) = 5; u: u16 = 6; x: varuint(8) = w8 + u; }', 'type mismatch')
