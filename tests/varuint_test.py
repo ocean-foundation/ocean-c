@@ -108,3 +108,16 @@ func main() int {
     if (kind(mix(15->varuint(4), 65535->varuint(16))) != 1 || mix(15->varuint(4), 65535->varuint(16)).(uint) != 65550) return 1;
     if (kind(mix((-3)->varint(8), 5->varuint(16))) != 2 || mix((-3)->varint(8), 5->varuint(16)).(int) != 2) return 2;
     return 0; }''')
+    # Compound assignment converts the operand to the destination type and operates
+    # there: it accepts any operand assignable to the destination, unlike x = x op y.
+    program('''func main() int {
+    w: varuint(8) = 255; u: u8 = 1; w += u;
+    x: i32 = 2147483647; y: i16 = 1; x += y;
+    d: varuint(8) = 200; e: u8 = 7; d /= e;
+    m: u8 = 16; n: varuint(8) = 16; m *= n;
+    s: varint(6) = -32; s -= 1;
+    if (w != 0 || x != -2147483648 || d != 28 || m != 0 || s != 31) return 1;
+    return 0; }''')
+    check('func main() { w: varuint(8) = 255; u: u8 = 1; w = w + u; }', 'expected varuint(8), got uint')
+    check('func main() { s: varint(6) = 1; t: i8 = 1; s -= t; }', 'expected varint(6), got i8')
+    check('func main() { x: i8 = 1; y: i32 = 2; x += y; }', 'expected i8, got i32')
