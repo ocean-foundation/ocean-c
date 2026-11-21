@@ -1,0 +1,27 @@
+{
+  "name": "ocean-lang-theme",
+  "displayName": "Ocean Lang Theme",
+  "description": "Ocean Programming Language dark and light themes for VS Code",
+  "version": "0.1.0",
+  "publisher": "ocean-lang-theme",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Themes"
+  ],
+  "contributes": {
+    "themes": [
+      {
+        "label": "Ocean Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/ocean-dark-color-theme.json"
+      },
+      {
+        "label": "Ocean Light",
+        "uiTheme": "vs",
+        "path": "./themes/ocean-light-color-theme.json"
+      }
+    ]
+  }
+}

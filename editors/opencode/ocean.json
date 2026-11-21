@@ -1,0 +1,258 @@
+{
+  "$schema": "https://opencode.ai/v2/theme.json",
+  "defs": {
+    "darkBg": "#081120",
+    "darkSurface": "#0d182b",
+    "darkRaised": "#182b46",
+    "darkSelection": "#22395c",
+    "darkLine": "#2b3e59",
+    "darkComment": "#6e7885",
+    "darkMuted": "#a0aec2",
+    "darkDefault": "#c2ccd6",
+    "darkText": "#e8eff9",
+    "darkAccent": "#79b8ff",
+    "darkKeyword": "#d58d52",
+    "darkString": "#83a271",
+    "darkNumber": "#84aac8",
+    "darkFunction": "#7db0e6",
+    "darkCall": "#a3bad8",
+    "darkField": "#ab8fba",
+    "darkClass": "#8bbfca",
+    "darkTypeparam": "#27babf",
+    "darkParam": "#a8acdf",
+    "darkNamespace": "#79a0cd",
+    "darkRemoved": "#d8736b",
+    "darkAddedBg": "#142423",
+    "darkRemovedBg": "#2a1621",
+    "darkAddedLineBg": "#101e20",
+    "darkRemovedLineBg": "#21121c",
+    "lightBg": "#edf3fc",
+    "lightSurface": "#e3ebf7",
+    "lightRaised": "#d4e2f5",
+    "lightSelection": "#c3d6f2",
+    "lightLine": "#a9b9cf",
+    "lightComment": "#788496",
+    "lightMuted": "#526680",
+    "lightDefault": "#1f2d3d",
+    "lightText": "#182d4d",
+    "lightAccent": "#245fbb",
+    "lightKeyword": "#0033b3",
+    "lightString": "#067d17",
+    "lightNumber": "#1750eb",
+    "lightFunction": "#1c5a9e",
+    "lightCall": "#2f4f86",
+    "lightField": "#871094",
+    "lightClass": "#1f4e79",
+    "lightTypeparam": "#00707b",
+    "lightParam": "#4b3fa3",
+    "lightNamespace": "#22578a",
+    "lightRemoved": "#b3261e",
+    "lightWarning": "#9a5b13",
+    "lightAddedBg": "#d7ecd9",
+    "lightRemovedBg": "#f5dcda",
+    "lightAddedLineBg": "#c8e3cb",
+    "lightRemovedLineBg": "#eccbcb"
+  },
+  "theme": {
+    "primary": {
+      "dark": "darkAccent",
+      "light": "lightAccent"
+    },
+    "secondary": {
+      "dark": "darkField",
+      "light": "lightField"
+    },
+    "accent": {
+      "dark": "darkKeyword",
+      "light": "lightKeyword"
+    },
+    "error": {
+      "dark": "darkRemoved",
+      "light": "lightRemoved"
+    },
+    "warning": {
+      "dark": "darkKeyword",
+      "light": "lightWarning"
+    },
+    "success": {
+      "dark": "darkString",
+      "light": "lightString"
+    },
+    "info": {
+      "dark": "darkCall",
+      "light": "lightCall"
+    },
+    "text": {
+      "dark": "darkText",
+      "light": "lightText"
+    },
+    "textMuted": {
+      "dark": "darkMuted",
+      "light": "lightMuted"
+    },
+    "background": {
+      "dark": "darkBg",
+      "light": "lightBg"
+    },
+    "backgroundPanel": {
+      "dark": "darkSurface",
+      "light": "lightSurface"
+    },
+    "backgroundElement": {
+      "dark": "darkRaised",
+      "light": "lightRaised"
+    },
+    "border": {
+      "dark": "darkLine",
+      "light": "lightLine"
+    },
+    "borderActive": {
+      "dark": "darkAccent",
+      "light": "lightAccent"
+    },
+    "borderSubtle": {
+      "dark": "darkRaised",
+      "light": "lightRaised"
+    },
+    "diffAdded": {
+      "dark": "darkString",
+      "light": "lightString"
+    },
+    "diffRemoved": {
+      "dark": "darkRemoved",
+      "light": "lightRemoved"
+    },
+    "diffContext": {
+      "dark": "darkMuted",
+      "light": "lightMuted"
+    },
+    "diffHunkHeader": {
+      "dark": "darkNamespace",
+      "light": "lightNamespace"
+    },
+    "diffHighlightAdded": {
+      "dark": "#9ab889",
+      "light": "#19962b"
+    },
+    "diffHighlightRemoved": {
+      "dark": "#e58d86",
+      "light": "#c93b32"
+    },
+    "diffAddedBg": {
+      "dark": "darkAddedBg",
+      "light": "lightAddedBg"
+    },
+    "diffRemovedBg": {
+      "dark": "darkRemovedBg",
+      "light": "lightRemovedBg"
+    },
+    "diffContextBg": {
+      "dark": "darkSurface",
+      "light": "lightSurface"
+    },
+    "diffLineNumber": {
+      "dark": "darkComment",
+      "light": "lightComment"
+    },
+    "diffAddedLineNumberBg": {
+      "dark": "darkAddedLineBg",
+      "light": "lightAddedLineBg"
+    },
+    "diffRemovedLineNumberBg": {
+      "dark": "darkRemovedLineBg",
+      "light": "lightRemovedLineBg"
+    },
+    "markdownText": {
+      "dark": "darkDefault",
+      "light": "lightDefault"
+    },
+    "markdownHeading": {
+      "dark": "darkFunction",
+      "light": "lightFunction"
+    },
+    "markdownLink": {
+      "dark": "darkCall",
+      "light": "lightCall"
+    },
+    "markdownLinkText": {
+      "dark": "darkFunction",
+      "light": "lightFunction"
+    },
+    "markdownCode": {
+      "dark": "darkString",
+      "light": "lightString"
+    },
+    "markdownBlockQuote": {
+      "dark": "darkComment",
+      "light": "lightComment"
+    },
+    "markdownEmph": {
+      "dark": "darkDefault",
+      "light": "lightDefault"
+    },
+    "markdownStrong": {
+      "dark": "darkText",
+      "light": "lightText"
+    },
+    "markdownHorizontalRule": {
+      "dark": "darkLine",
+      "light": "lightLine"
+    },
+    "markdownListItem": {
+      "dark": "darkKeyword",
+      "light": "lightKeyword"
+    },
+    "markdownListEnumeration": {
+      "dark": "darkNumber",
+      "light": "lightNumber"
+    },
+    "markdownImage": {
+      "dark": "darkCall",
+      "light": "lightCall"
+    },
+    "markdownImageText": {
+      "dark": "darkFunction",
+      "light": "lightFunction"
+    },
+    "markdownCodeBlock": {
+      "dark": "darkDefault",
+      "light": "lightDefault"
+    },
+    "syntaxComment": {
+      "dark": "darkComment",
+      "light": "lightComment"
+    },
+    "syntaxKeyword": {
+      "dark": "darkKeyword",
+      "light": "lightKeyword"
+    },
+    "syntaxFunction": {
+      "dark": "darkFunction",
+      "light": "lightFunction"
+    },
+    "syntaxVariable": {
+      "dark": "darkDefault",
+      "light": "lightDefault"
+    },
+    "syntaxString": {
+      "dark": "darkString",
+      "light": "lightString"
+    },
+    "syntaxNumber": {
+      "dark": "darkNumber",
+      "light": "lightNumber"
+    },
+    "syntaxType": {
+      "dark": "darkClass",
+      "light": "lightClass"
+    },
+    "syntaxOperator": {
+      "dark": "darkDefault",
+      "light": "lightDefault"
+    },
+    "syntaxPunctuation": {
+      "dark": "darkDefault",
+      "light": "lightDefault"
+    }
+  }
+}
