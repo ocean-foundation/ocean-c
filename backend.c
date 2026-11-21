@@ -1689,6 +1689,17 @@ static Kind canonicalIntegerKind(unsigned width, int isUnsigned) {
     default: return (Kind)((isUnsigned ? VARUINT_BASE : VARINT_BASE) + width);
     }
 }
+// A kind that represents every value of both integer kinds exactly: the wider
+// width for one signedness, otherwise a signed kind of max(signed width,
+// unsigned width + 1) bits. Used where values must compare mathematically.
+static Kind commonIntegerKind(Backend *, Kind, Kind);
+static Kind exactComparisonKind(Backend *b, Kind a, Kind c) {
+    unsigned aw = integerWidth(b, a), cw = integerWidth(b, c);
+    int au = unsignedInteger(b, a), cu = unsignedInteger(b, c);
+    if (au == cu) return canonicalIntegerKind(aw > cw ? aw : cw, au);
+    unsigned uw = au ? aw : cw, sw = au ? cw : aw, width = sw > uw ? sw : uw + 1;
+    return width > OCEAN_MAX_INTEGER_BITS ? commonIntegerKind(b, a, c) : canonicalIntegerKind(width, 0);
+}
 static Kind commonIntegerKind(Backend *b, Kind a, Kind c) {
     if (a == c) return a;
     unsigned aw = integerWidth(b, a), cw = integerWidth(b, c);
@@ -4018,8 +4029,12 @@ static int runtimeOperator(Backend *b, enum binaryExprType op, Kind a, Kind c) {
     int comparison = op >= EXPR_EQUALITY && op <= EXPR_GREATER_EQUALS;
     if ((integral(b, a) || floating(b, a)) && (integral(b, c) || floating(b, c))) {
         if (integral(b, a) && integral(b, c) && unsignedInteger(b, a) != unsignedInteger(b, c)) {
-            unsigned aw = integerWidth(b, a), cw = integerWidth(b, c), uw = unsignedInteger(b, a) ? aw : cw;
-            if ((aw <= 64 && cw <= 64 && uw == 64) || uw >= OCEAN_MAX_INTEGER_BITS) return 0;
+            // Mixed signedness is valid (§9.2) unless both operands are
+            // varint/varuint and the grown result would exceed the maximum width.
+            unsigned aw = integerWidth(b, a), cw = integerWidth(b, c);
+            unsigned uw = unsignedInteger(b, a) ? aw : cw, sw = unsignedInteger(b, a) ? cw : aw;
+            if (parameterizedIntegerWidth(representationKind(b, a)) && parameterizedIntegerWidth(representationKind(b, c)) &&
+                uw >= sw && uw >= OCEAN_MAX_INTEGER_BITS) return 0;
         }
         return comparison || (op >= EXPR_ADD && op <= EXPR_DIVIDE) ||
                (!floating(b, a) && !floating(b, c) &&

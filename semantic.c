@@ -2054,7 +2054,10 @@ static Type *operatorResult(Context *c, enum binaryExprType op, Type *a, Type *b
         int comparison = op >= EXPR_EQUALITY && op <= EXPR_GREATER_EQUALS;
         if (!arithmetic && !comparison && !(integral && !isFloat)) return NULL;
         int au, bu, aw = integerShape(a, &au), bw = integerShape(b, &bu);
-        if (!isFloat && aw && bw && au != bu && (au ? aw : bw) >= OCEAN_MAX_INTEGER_BITS) return NULL;
+        // Mixed signedness only fails when the result must grow past the maximum,
+        // which needs both operands to be varint/varuint (as in commonIntegerType).
+        if (!isFloat && aw && bw && au != bu && parameterizedInteger(a) && parameterizedInteger(b) &&
+            (au ? aw : bw) >= (au ? bw : aw) && (au ? aw : bw) >= OCEAN_MAX_INTEGER_BITS) return NULL;
         Type *floatResult = floatOperatorType(a, b);
         // Integer pairs follow the same result rule as concrete operands (§9.2);
         // invalid mixed-sign pairs were rejected above.
@@ -2604,11 +2607,13 @@ static Type *expression(Context *c, expr *e) {
         if (coerceFloatLiteral(c, a, &v->right, baseOperation(v->operation) != v->operation))
             b = expression(c, &v->right);
         if (coerceFloatLiteral(c, b, &v->left, 0)) a = expression(c, &v->left);
-        if (integerLiteralFits(a, &v->right) && !(integerFits(a, b) && integerFits(b, a))) {
+        // A fitting literal takes the other operand's exact type (§7.4), even when the
+        // types have equal ranges (varint(64) + 1 is varint(64), not int).
+        if (integerLiteralFits(a, &v->right) && !identicalTypes(a, b)) {
             typeIntegerLiteral(a, &v->right);
             b = a;
         }
-        if (integerLiteralFits(b, &v->left) && !(integerFits(a, b) && integerFits(b, a))) {
+        if (integerLiteralFits(b, &v->left) && !identicalTypes(a, b)) {
             typeIntegerLiteral(b, &v->left);
             a = b;
         }

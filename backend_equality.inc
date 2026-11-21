@@ -181,6 +181,13 @@ static void emitBoxedEquality(Backend *b) {
             unsigned selected = ++b->label, next = ++b->label;
             branch(b, match, selected, next); label(b, selected);
             Value a = equalityBits(b, left->kind, "%left.bits"), c = equalityBits(b, right->kind, "%right.bits");
+            // Boxed numbers compare exact values, not the arithmetic result type
+            // (which reinterprets i64 + u64 as i64): equality stays transitive and
+            // agrees with emitMapHash, which normalizes values. i8(-1) != u8(255).
+            if (integral(b, left->kind) && integral(b, right->kind)) {
+                Kind exact = exactComparisonKind(b, left->kind, right->kind);
+                a = convert(b, a, exact); c = convert(b, c, exact);
+            }
             Value result = binary(b, EXPR_EQUALITY, a, c);
             fprintf(b->body, "  ret i1 %s\n", result.operand); b->terminated = 1; label(b, next);
         }

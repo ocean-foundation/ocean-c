@@ -125,3 +125,27 @@ func main() int {
     check('func main() { x: int = 1; y: uint = 2; x += y; z: int = x + y; }')
     check('func main() { s: varint(6) = 1; t: i8 = 1; s -= t; }', 'expected varint(6), got i8')
     check('func main() { x: i8 = 1; y: i32 = 2; x += y; }', 'expected i8, got i32')
+    # Boxed numbers compare exact values (transitive, consistent with map hashing),
+    # while concrete i8 == u8 follows the arithmetic rule.
+    program('''func main() int {
+    a: any = (-1)->i8; b: any = 255->u8; c: any = (-1)->i16; d: any = 255->u16; f: any = 5; g: any = 5->uint;
+    if (a == b || !(a == c) || !(b == d) || !(f == g)) return 1;
+    m: map[any]int = {}; m[a] = 1; m[b] = 2; m[f] = 3; m[g] = 4;
+    if (len(m) != 3 || m[a] != 1 || m[b] != 2 || m[f] != 4) return 2;
+    ci: i8 = -1; cu: u8 = 255; if (ci != cu) return 3;
+    return 0; }''')
+    # int | uint operands dispatch at run time instead of trapping.
+    program('''func lt(a int | uint, b int | uint) bool { return a < b; }
+func add(a int | uint, b int | uint) int | uint { return a + b; }
+func main() int {
+    if (!lt(1, 2->uint) || lt(3->uint, 2) || add(1, 2->uint).(int) != 3 || add(2->uint, 3->uint).(uint) != 5) return 1;
+    return 0; }''')
+    # A fitting literal takes the other operand's exact type, even with equal ranges.
+    check('func main() { x: varint(64) = 1; z: string = x + 1; }', 'got varint(64)')
+    check('func main() { x: varint(64) = 1; z: string = 1 + x; }', 'got varint(64)')
+    check('func main() { u: varuint(64) = 1; z: string = u + 1; }', 'got varuint(64)')
+    check('func main() { x: varint(64) = 1; n := 2; z: string = x + n; }', 'got int')
+    # The maximum-width limit applies only when the result must grow (both parameterized).
+    check('func f(a i8 | i16, b varuint(8388608)) { z: string = a + b; } func main() {}', 'got varint(8388608)')
+    check('func f(a varint(8) | varint(16), b varuint(8388608)) { c := a + b; } func main() {}',
+          'operator is not supported by every possible operand type')
