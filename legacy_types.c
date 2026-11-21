@@ -138,6 +138,13 @@ static size_t legacyBase(Legacy *g, size_t i, Text *out, int *changed) {
         verbatim(g, out, i, close);
         return close;
     }
+    // varint(n) / varuint(n): the parenthesized width belongs to the base type.
+    if ((named(g, i, "varint") || named(g, i, "varuint")) && kind(g, i + 1) == LEFT_PAREN) {
+        size_t close = balanced(g, i + 1);
+        if (!close) return 0;
+        verbatim(g, out, i, close);
+        return close;
+    }
     if (named(g, i, "map") && kind(g, i + 1) == LEFT_BRACKET) {
         size_t close = balanced(g, i + 1);
         if (!close) return 0;

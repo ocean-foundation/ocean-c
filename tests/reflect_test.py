@@ -173,7 +173,7 @@ int64_t liveAllocations(void) { return live; }
             x := Wide{340282366920938463463374607431768211456->Named, -18446744073709551616};
             fields := reflect.Fields(x);
             if (fields[0].Value.(Named) != x.value || fields[1].Value.(varint(129)) != x.signed) return 1;
-            boxes: any[] = {x.value, x.value}; copied := boxes;
+            boxes: []any = {x.value, x.value}; copied := boxes;
             if (copied[0] != copied[1]) return 2;
         }
         return 0;

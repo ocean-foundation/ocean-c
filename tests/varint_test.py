@@ -30,13 +30,13 @@ with tempfile.TemporaryDirectory(prefix='ocean-varint-') as directory:
 func identity(x varint(6)) varint(6) { return x; }
 func main() int {
     n := 7->nibble; n++; n += 1->Alias;
-    x: varint(6) = -12; a: varint(4)[2] = {2, -3};
+    x: varint(6) = -12; a: [2]varint(4) = {2, -3};
     p := &x; *p = -11;
     b: any = x; y := b.(varint(6));
     if (sizeof(varint(4)) != 1 || sizeof(nibble) != 1) return 1;
     if (n->int != -7 || identity(y)->int != -11 || a[1]->int != -3 || x != -11 || a[0] != 2) return 2;
     z := zero(varint(9));
-    literal := varint(4)[2]{1, 2}; dynamic := varint(4)[]{3, 4};
+    literal := [2]varint(4){1, 2}; dynamic := []varint(4){3, 4};
     if (literal[0] != 1 || dynamic[1] != 4) return 3;
     return z->int;
 }''')
@@ -54,3 +54,19 @@ func main() int {
     check('func main() { x: varint(6) = 3; y: varint(4) = x; }', 'type mismatch')
     check('type nibble varint(4); func main() { x: nibble = 3; }', 'type mismatch')
     check('func main() { x: varint; }', 'varint requires')
+    # Array and pointer modifiers are prefixes; postfix forms name the prefix spelling.
+    for body, suggestion in (
+        ('func main() { x: varint(4)[2] = {1, 2}; }', "'[2]varint(4)'"),
+        ('func main() { x := varuint(4)[]{1}; }', "'[]varuint(4)'"),
+        ('func main() { x: varint(8)* = null; }', "'*varint(8)'"),
+        ('func main() { x: varint(4)[2][3]; }', "'[3][2]varint(4)'"),
+        ('func f(x varuint(4)[]) {} func main() {}', "'[]varuint(4)'"),
+    ):
+        check(body, suggestion)
+    source.write_text('package main;\nfunc f(x varuint(4)[]) {}\n'
+                      'func main() { a: varint(4)[2] = {1, 2}; b := varint(4)[2]{3, 4}; p: varuint(8)* = null; }\n')
+    result = subprocess.run([compiler, 'fix', str(source)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert source.read_text() == ('package main;\nfunc f(x []varuint(4)) {}\n'
+                                  'func main() { a: [2]varint(4) = {1, 2}; b := [2]varint(4){3, 4}; p: *varuint(8) = null; }\n'), source.read_text()
+    check(source.read_text()[len('package main;\n'):])

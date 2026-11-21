@@ -91,12 +91,12 @@ struct Bits { a varuint(128) : 4; b varint(256) : 5; }
 func copy(x Record) Record { return x; }
 func main() int {
     x := Record{340282366920938463463374607431768211456, -18446744073709551616};
-    a: Record[2] = {x, copy(x)}; a[1].value++;
+    a: [2]Record = {x, copy(x)}; a[1].value++;
     if (a[0].value + 1 != a[1].value) return 1;
-    dynamic: varuint(256)[] = {x.value}; dynamic += x.value + 1;
+    dynamic: []varuint(256) = {x.value}; dynamic += x.value + 1;
     if (dynamic[1] != a[1].value) return 2;
     box: any = x; y := box.(Record); if (y != x) return 3;
-    boxes: any[] = {x.value, y.value}; if (boxes[0] != boxes[1]) return 4;
+    boxes: []any = {x.value, y.value}; if (boxes[0] != boxes[1]) return 4;
     m: map[varuint(256)]int = {}; m[x.value] = 9;
     if (m[y.value] != 9) return 5;
     b := Bits{15, -16}; b.a++; b.b++; if (b.a != 0 || b.b != -15) return 6;

@@ -1445,9 +1445,9 @@ static char parseSignatureTypeImpl(parserState *state, size_t depth) {
         advance(state);
         if (currentToken(state).type != RIGHT_PAREN)
             return signatureError(state, !strcmp(tok.lexeme, "varuint") ? "Expected closing parenthesis after varuint width" : "Expected closing parenthesis after varint width");
+        // Array modifiers are prefixes ([n]varint(w)); a trailing '[' is legacy
+        // postfix syntax, reported by parseSignatureTypeInner.
         advance(state);
-        while (currentToken(state).type == LEFT_BRACKET)
-            if (!parseTypeBrackets(state, depth + 1)) return 0;
         return 1;
     }
     if (tok.type == IDENTIFIER && !strcmp(tok.lexeme, "buffer")) {

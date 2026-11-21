@@ -42,7 +42,7 @@ func main() int {
     p := &b; p.b = 9; if (b.b != 9 || b.c != -1) return 3;
     b.flag = false; if (b.flag || b.c != -1) return 4;
     c := take(b); if (c.a != 12 || b.a != 0) return 5;
-    a: Bits[2] = {b, c}; a[1].c = -4; if (a[1].b != 9 || a[0].c != -1) return 6;
+    a: [2]Bits = {b, c}; a[1].c = -4; if (a[1].b != 9 || a[0].c != -1) return 6;
     z: any = b; d := z.(Bits); if (d.b != 9 || d != b) return 7;
     b.a, b.b = b.b, b.a; if (b.a != 9 || b.b != 0) return 8;
     return 0;
@@ -56,7 +56,7 @@ func main() int {
     e := Exact{-32, -1}; e.x++; if (e.x != -31 || e.y != -1) return 3;
     return 0;
 }''')
-    program('''struct Owned { a uint : 4; b uint : 4; text string; values int[]; c int : 2; }
+    program('''struct Owned { a uint : 4; b uint : 4; text string; values []int; c int : 2; }
 func copy(x Owned) Owned { x.a = 2; x.values[0] = 9; return x; }
 func main() int { x := Owned{a: 7, b: 12, c: -1};
     if (len(x.text) != 0 || len(x.values) != 0 || x.a != 7) return 1;

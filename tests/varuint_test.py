@@ -34,7 +34,7 @@ func main() int {
     x: varuint(6) = 63; wide: varuint(9) = x;
     signed: varint(7) = x; if (wide != 63 || signed != 63) return 3;
     if (x / 2 != 31 || x % 2 != 1 || x >> 1 != 31 || x <= 31) return 4;
-    literal := varuint(4)[2]{8, 15}; dynamic := varuint(4)[]{9, 14};
+    literal := [2]varuint(4){8, 15}; dynamic := []varuint(4){9, 14};
     p := &x; *p = 61;
     b: any = x; y := b.(varuint(6));
     if (identity(y) != 61 || literal[1] != 15 || dynamic[0] != 9) return 5;
@@ -60,9 +60,9 @@ func main() int { b := Flags{15, 8, 7->nibble};
     b.low++; b.named++; if (b.low != 0 || b.high != 8 || b.named->uint != 0) return 2;
     b.high >>= 1; if (b.high != 4) return 3;
     return 0; }''')
-    program('''extern i32 snprintf(buffer<i8>[] out, int size, buffer<i8>[] format, ...);
+    program('''extern i32 snprintf(buffer<i8> out, int size, buffer<i8> format, ...);
 func main() int {
-    out := i8[100]; a: varuint(6) = 63; b: varuint(32) = 4294967295;
+    out := [100]i8; a: varuint(6) = 63; b: varuint(32) = 4294967295;
     c: varuint(64) = 18446744073709551615;
     n := extern.snprintf(out.data, len(out), "%d %u %llu\\0".data, a, b, c);
     s := ""; for (i := 0; i < n; i++) s += out[i];
@@ -85,6 +85,6 @@ func main() int {
         'func main() { x: varuint(6) = 3; y: varint(6) = x; }',
         'func main() { x: varint(6) = 3; y: varuint(6) = x; }',
         'type nibble varuint(4); func main() { x: nibble = 3; }',
-        'func f(x varuint(4)[]) {} func main() { x: varint(4)[] = {}; f(x); }',
+        'func f(x []varuint(4)) {} func main() { x: []varint(4) = {}; f(x); }',
     ):
         check(body, 'type mismatch')
