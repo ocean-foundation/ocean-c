@@ -28,6 +28,8 @@ LLVM's inclusive maximum. Ordinary `int` and `uint` remain 64-bit. Decimal,
 hexadecimal, binary, and octal integer literals preserve their complete value.
 Literals exceeding `uint` infer `varuint(k)` with the minimum magnitude width;
 negative literals exceeding the ordinary range infer a fitting signed width.
+Integer literals used as floats round once to the destination width; one too
+large for it becomes infinity with a warning, unless explicitly cast with `->f64`.
 Prefer an explicit destination or named type for a stable storage width:
 
 ```ocean
@@ -67,8 +69,10 @@ bits, into shared storage of at most 64 bits; an ordinary field starts separate
 storage. Each group uses whole bytes and target ABI alignment. Two adjacent
 4-bit fields occupy one byte. Reads preserve the declared type and sign-extend
 signed fields from their field width. Writes truncate to the field width and
-preserve neighboring fields. Bitfields cannot have their address taken,
-including implicit borrowing for a pointer receiver.
+preserve neighboring fields; an assignment or prefix `++`/`--` yields the
+stored value. Bitfields cannot have their address taken, including implicit
+borrowing for a pointer receiver. `any` fields and enum payload fields cannot
+be bitfields.
 
 An explicitly written `varint(n)` field with a smaller bitfield size produces a
 warning and still compiles: `struct Small { num varint(6) : 5; }`. This warning

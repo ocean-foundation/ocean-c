@@ -129,3 +129,36 @@ func main() int {
     rejected('func main() { x: varuint(128) = -1; }', 'out of range')
     rejected('func main() { x: varuint(256) = 1; y: varuint(128) = x; }', 'type mismatch')
     rejected('extern int f(int x, ...); func main() { x: varuint(128) = 1; extern.f(1, x); }', 'C interoperability')
+
+    # Wide literals round once, directly to f32 (2^80 + 2^56 + 1 -> 2^80 + 2^57, not 2^80).
+    program('''func main() int {
+    x: f32 = 1208925891672223212634113; up := 1208925963729817250562048->f32;
+    if (x != up || x == 1208925819614629174706176->f32 || 1208925891672223212634113->f32 != up) return 1;
+    return 0; }''')
+
+    # Literals too large for their float destination warn, except for an explicit ->f64 cast.
+    def diagnostics(body):
+        source.write_text('package main;\n' + body)
+        result = run(compiler, 'build', '--check', str(source))
+        assert result.returncode == 0, result.stderr
+        return result.stderr
+    big, f32big = '0x1' + '0' * 256, '0x1' + '0' * 32
+    for body, width in ((f'func main() {{ x: float = {big}; }}', 'f64'),
+                        (f'func main() {{ x: f32 = {f32big}; }}', 'f32'),
+                        (f'func main() {{ x: f32 = -{f32big}; }}', 'f32'),
+                        (f'func main() {{ x := {big}->f32; }}', 'f32'),
+                        (f'func main() {{ x := {f32big}->f32; }}', 'f32')):
+        stderr = diagnostics(body)
+        assert 'warning:' in stderr and f'out of range for {width}' in stderr, (body, stderr)
+    for body in (f'func main() {{ x := {big}->f64; }}', f'func main() {{ x := {big}->float; }}',
+                 f'func main() {{ x := {f32big}->f64; y: f32 = 340282346638528859811704183484516925440; }}'):
+        assert 'warning:' not in diagnostics(body), body
+
+    # Decimal literals convert subquadratically: a million digits (~3.3M bits) emits in about a
+    # second, where digit-by-digit conversion took minutes. Clang time is excluded.
+    import time
+    source.write_text('package main;\nfunc main() { x := 1' + '0' * 1000000 + '; }\n')
+    started = time.time()
+    result = run(compiler, 'build', str(source), '--emit-llvm', '-o', str(ir))
+    assert result.returncode == 0 and time.time() - started < 20, (result.stderr, time.time() - started)
+    rejected('func main() { x := 1' + '0' * 2525223 + '; }', 'exceeding 8388608 bits')

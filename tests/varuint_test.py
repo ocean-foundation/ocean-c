@@ -88,3 +88,13 @@ func main() int {
         'func f(x []varuint(4)) {} func main() { x: []varint(4) = {}; f(x); }',
     ):
         check(body, 'type mismatch')
+    # Type-list operands use the same result rule as concrete operands: unsigned
+    # pairs of at most 64 bits give uint, and pairs that disagree stay a type list.
+    program('''func add(a varuint(4) | varuint(8), b varuint(16)) uint { return a + b; }
+func small(a u8 | u16, b u32) uint { return a * b; }
+func main() int {
+    if (add(3->varuint(4), 4->varuint(16)) != 7 || add(200->varuint(8), 1->varuint(16)) != 201) return 1;
+    if (small(2->u8, 5->u32) != 10) return 2;
+    return 0; }''')
+    check('func mix(a varuint(4) | varint(8), b varuint(16)) { z: string = a + b; } func main() {}',
+          'got varuint(4)|varint(8)')

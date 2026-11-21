@@ -2459,7 +2459,14 @@ static stmt parseEnum(parserState *state) {
             form = 2;
             tok = advance(state);
             while (tok.type != RIGHT_CURLY_BRACE) {
+                size_t before = fields.count;
                 if (!parseStructFields(state, &fields, NULL, 0)) goto invalid;
+                // Enum payloads have no packed layout; reject rather than drop the width.
+                for (size_t i = before; i < fields.count; i++)
+                    if (fields.bits && fields.bits[i]) {
+                        signatureError(state, "Bitfields are not supported in enum payloads");
+                        goto invalid;
+                    }
                 SET_TOK;
                 if (tok.type == RIGHT_CURLY_BRACE) break;
                 if (tok.type != COMMA && tok.type != SEMICOLON) {
@@ -2499,6 +2506,7 @@ static stmt parseEnum(parserState *state) {
         node.payloads[node.nMembers] = (struct stmt_struct){.name = name,
             .nFields = fields.count,
             .nVarParams = fields.count, .fieldNames = fields.names, .fieldTypes = fields.types};
+        free(fields.bits); fields.bits = NULL;
         token *names = realloc(node.names, (node.nMembers + 1) * sizeof(token));
         CHECK_MALLOC(names);
         node.names = names;

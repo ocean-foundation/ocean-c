@@ -165,7 +165,8 @@ static int identifierName(const char *name) {
                               "interface", "continue",    "break",  "enum",   "if",   "defer",
                               "switch",    "fallthrough", "extern", "for",    "goto", "as",
                               "package",   "else",        "range",  "return", "case", "default",
-                              "null",      "panic",       "true",   "false"};
+                              "null",      "panic",       "true",   "false",  "match", "varint",
+                              "varuint"};
     for (size_t i = 0; i < sizeof(reserved) / sizeof(*reserved); i++)
         if (!strcmp(name, reserved[i]))
             return 0;

@@ -981,6 +981,14 @@ static float parseSinglePrecision(const char *spelling) {
     return value;
 }
 
+// An integer literal too large for its floating-point destination becomes
+// infinity. Warn, except for an explicit ->f64 cast, which requests exactly that.
+static void wideLiteralOverflowWarning(Context *c, token at, int width) {
+    at = diagnosticLocation(c, at);
+    diagnostic(programSource(c->program, at.filename), at, "semantic", "warning",
+               "integer literal is out of range for %s and becomes infinity; cast it with ->f64 if that is intended",
+               width == 32 ? "f32" : "f64");
+}
 // Literal syntax, including negated literals, may take the expected float width.
 static int coerceFloatLiteral(Context *c, Type *expected, expr *e, int contextual) {
     int width = floatWidth(expected);
@@ -1005,10 +1013,19 @@ static int coerceFloatLiteral(Context *c, Type *expected, expr *e, int contextua
     if (literal->type != LITERAL_TYPE_INT) return 0;
     double *number = malloc(sizeof(*number));
     if (!number) exit(1);
-    double value = literal->wideInteger ? strtod(literal->wideInteger + 1, NULL) * (literal->negativeWide ? -1 : 1)
-                   : literal->unsignedLiteral ? (double)*(uint64_t *)literal->value
-                                              : (double)*(int64_t *)literal->value;
+    double value;
+    if (literal->wideInteger) {
+        // The exact magnitude is an LLVM hex spelling (u0x...). Round it once,
+        // directly to the target width: f32 via double would round twice.
+        const char *hex = literal->wideInteger + 1;
+        value = width == 32 ? (double)strtof(hex, NULL) : strtod(hex, NULL);
+        if (literal->negativeWide) value = -value;
+    } else {
+        value = literal->unsignedLiteral ? (double)*(uint64_t *)literal->value
+                                         : (double)*(int64_t *)literal->value;
+    }
     *number = width == 32 ? (float)value : value;
+    if (!isfinite(*number)) wideLiteralOverflowWarning(c, e->location, width);
     literal->singlePrecision = width == 32;
     literal->wideInteger = NULL;
     free(literal->value);
@@ -1966,7 +1983,9 @@ static Type *operatorResult(Context *c, enum binaryExprType op, Type *a, Type *b
             (((aw <= 64 && bw <= 64) && (au ? aw : bw) == 64) ||
              (au ? aw : bw) >= OCEAN_MAX_INTEGER_BITS)) return NULL;
         Type *floatResult = floatOperatorType(a, b);
-        if (!isFloat && aw && bw && (aw > 64 || bw > 64))
+        // Integer pairs follow the same result rule as concrete operands (§9.2);
+        // invalid mixed-sign pairs were rejected above.
+        if (!isFloat && aw && bw)
             return comparison ? &boolean : commonIntegerType(c, a, b, (token){0});
         return comparison ? &boolean : floatResult ? floatResult : identicalTypes(a, b) ? a : isFloat ? &floating : &integer;
     }
@@ -2782,6 +2801,19 @@ static Type *expression(Context *c, expr *e) {
         if (!compatible(a, b) && !compatibleTypes(ar, br) && !(aNumeric && bNumeric) &&
             !(aPointer && bPointer) && !(aPointer && bInteger) && !(aInteger && bPointer))
             error(c, at, "invalid conversion");
+        if (floatWidth(b) == 32) {
+            // A wide integer literal cast to f32 that overflows becomes infinity.
+            expr *literalExpr = &v->child;
+            if (literalExpr->type == EXPR_TYPE_UNARY &&
+                ((struct expr_unary *)literalExpr->underlying)->operation == UNARY_NEGATE)
+                literalExpr = &((struct expr_unary *)literalExpr->underlying)->child;
+            if (literalExpr->type == EXPR_TYPE_LITERAL) {
+                struct expr_literal *literal = literalExpr->underlying;
+                if (literal->type == LITERAL_TYPE_INT && literal->wideInteger &&
+                    !isfinite(strtof(literal->wideInteger + 1, NULL)))
+                    wideLiteralOverflowWarning(c, literalExpr->location, 32);
+            }
+        }
         return b;
     }
     case EXPR_TYPE_ENUM: {
@@ -3132,7 +3164,9 @@ static void statement(Context *c, stmt *s) {
                 while (base->underlying) base = base->underlying;
                 int isUnsigned = 0;
                 int width = canonical(base) == &boolean ? 1 : integerShape(base, &isUnsigned);
-                if (!width && canonical(base) != &any)
+                // Struct type parameters (bound as any with semanticBase &any) are
+                // checked per instantiation; a concrete any field is not an integer.
+                if (!width && base->semanticBase != &any)
                     error(c, v->fieldNames[i], "bitfield requires an integer or bool type");
                 else if (width && v->fieldBits[i] > (unsigned)width)
                     error(c, v->fieldNames[i], "bitfield size exceeds its type width");

@@ -93,3 +93,17 @@ func main() int { x := Generic<int>{-2, 17}; x.x++; if (x.x != -1 || x.y != 17 |
     check('struct B<T> { a T : 4; } func main() { b: B<float>; }', 'integer or bool')
     check('struct B<T> { a T : 9; } func main() { b: B<i8>; }', 'exceeds its type width')
     check('type N int; func (n *N) Set() { *n = 1->N; } struct B { a N : 4; } func main() { b: B; b.a.Set(); }', 'address of a bitfield')
+    # Concrete any is not an integer; generic type parameters are checked per instantiation.
+    check('struct Bad { value any : 1; } func main() { b: Bad; }', 'bitfield requires an integer or bool type')
+    check('struct G<T> { x T : 3; } func main() { g: G<int>; g.x = 5; }')
+    # Prefix ++/-- and assignments yield the stored (truncated, sign-extended) value.
+    program('''struct B { x int : 3; u u8 : 2; }
+func main() int {
+    b: B; b.x = 3; r := ++b.x; b.u = 3; s := ++b.u; p := b.x++; d := --b.u;
+    if (r != -4 || s != 0 || p != -4 || b.x != -3 || d != 3) return 1;
+    a := (b.x = 5); c := (b.u += 6);
+    if (a != -3 || b.x != -3 || c != 1 || b.u != 1) return 2;
+    return 0; }''')
+    # Enum record payloads have no packed layout, so bitfield widths are rejected rather than dropped.
+    check('enum E { A { x uint : 3 } } func main() {}', 'Bitfields are not supported in enum payloads')
+    check('enum E { A { x uint; y int : 2 } } func main() {}', 'Bitfields are not supported in enum payloads')

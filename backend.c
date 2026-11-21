@@ -5163,7 +5163,8 @@ static Value expressionImpl(Backend *b, expr *e) {
                 Value replacement = slot(b, r.kind); store(b, replacement, r);
                 bind(b, ((struct expr_identifier *)v->left.underlying)->lexeme.lexeme, replacement);
             } else store(b, addr, r);
-            return r;
+            // A bitfield store truncates; the assignment's value is the stored value.
+            return addr.bitWidth ? load(b, addr) : r;
         }
         Value a = expression(b, &v->left);
         if (v->operation == EXPR_LOGICAL_OR || v->operation == EXPR_LOGICAL_AND) {
@@ -5226,10 +5227,10 @@ static Value expressionImpl(Backend *b, expr *e) {
                                         : value(b, old.kind, "1");
             Value r = binary(b, decrement ? EXPR_SUBTRACT : EXPR_ADD, old, one);
             store(b, addr, r);
-            return v->operation == UNARY_POSTFIX_INCREMENT ||
-                           v->operation == UNARY_POSTFIX_DECREMENT
-                       ? old
-                       : r;
+            if (v->operation == UNARY_POSTFIX_INCREMENT || v->operation == UNARY_POSTFIX_DECREMENT)
+                return old;
+            // A bitfield store truncates; the prefix result is the stored value.
+            return addr.bitWidth ? load(b, addr) : r;
         }
         Value a = expression(b, &v->child);
         if (a.kind == SCALAR_ANY) {
