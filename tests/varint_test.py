@@ -101,3 +101,9 @@ func main() int {
     # Widths above 64 bits are rejected in extern signatures even if never called.
     check('extern varint(65) f(); func main() {}', 'C has no 65-bit integer type')
     check('type W = varuint(128); extern void g(W x); func main() {}', 'C has no 128-bit integer type')
+    # An assignment's value has the destination's type: z := (x = y) is varint(16), not varint(8).
+    program('''func main() int {
+    x: varint(16); y: varint(8) = 127; z := (x = y); z++;
+    boxed: any = z; f: float; g: f32 = 1.5; h := (f = g); hb: any = h;
+    if (z->int != 128 || boxed.(varint(16)) != 128 || hb.(float) != 1.5) return 1;
+    return 0; }''')
