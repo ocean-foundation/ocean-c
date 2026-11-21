@@ -8,6 +8,8 @@ It is idiomatic to define a custom type with `type nibble varint(4);` rather
 than repeat `varint(4)` at every use. Named types are distinct: initialize with
 `x := 3->nibble;` and convert back with `x->int`. Use `varint(4)` directly when
 an anonymous width is appropriate, for example `x: varint(4) = 3;`.
+`varint` and `varuint` are keywords: they cannot name variables, fields,
+parameters, functions, or types.
 
 `varuint(n)` is the unsigned counterpart of `varint(n)`, with an integer
 literal width from 1 through 8388608 and range 0 through 2^n-1. For example,

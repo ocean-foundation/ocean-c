@@ -70,3 +70,13 @@ func main() int {
     assert source.read_text() == ('package main;\nfunc f(x []varuint(4)) {}\n'
                                   'func main() { a: [2]varint(4) = {1, 2}; b := [2]varint(4){3, 4}; p: *varuint(8) = null; }\n'), source.read_text()
     check(source.read_text()[len('package main;\n'):])
+    # varint and varuint are keywords: they cannot name anything.
+    for body, message in (
+        ('func main() { varint := 2; }', 'varint requires a bit width'),
+        ('func main() { x := 1; y := varuint; }', 'varuint requires a bit width'),
+        ('func f(varint int) {} func main() {}', 'varint requires a bit width'),
+        ('struct S { varuint int; } func main() {}', 'Expected struct field name'),
+        ('type varint int; func main() {}', 'Expected type name'),
+        ('func varuint() {} func main() {}', 'Expected function name'),
+    ):
+        check(body, message)

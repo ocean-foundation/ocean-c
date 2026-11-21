@@ -505,7 +505,7 @@ static Type *typeOf(Context *c, typeTokens span) {
         }
         return v;
     }
-    if (t.type == IDENTIFIER && (!strcmp(t.lexeme, "varint") || !strcmp(t.lexeme, "varuint"))) {
+    if (t.type == VARINT || t.type == VARUINT) {
         if (span.nTokens != 4 || span.tokens[1].type != LEFT_PAREN ||
             span.tokens[2].type != LITERAL_INT || span.tokens[3].type != RIGHT_PAREN ||
             span.tokens[2].wideInteger || span.tokens[2].numValue.integer < 1 || span.tokens[2].numValue.integer > OCEAN_MAX_INTEGER_BITS) {
@@ -1054,6 +1054,7 @@ static typeTokens numericTypeSpan(Type *type, token at) {
     span.tokens[0].type = IDENTIFIER;
     span.tokens[0].lexeme = (char *)(type->spelling ? type->spelling : type->name);
     if (type->varintBits) {
+        span.tokens[0].type = type->varintUnsigned ? VARUINT : VARINT;
         span.tokens[0].lexeme = type->varintUnsigned ? "varuint" : "varint";
         span.tokens[1].type = LEFT_PAREN; span.tokens[1].lexeme = "(";
         span.tokens[2].type = LITERAL_INT; span.tokens[2].lexeme = "<width>";

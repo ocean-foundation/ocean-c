@@ -261,10 +261,12 @@ static expr atomicImpl(parserState *state) {
             CHECK_SYNC;
             return (expr){.type = EXPR_TYPE_FUNCTION, .underlying = function.value};
         }
+        case VARINT:
+        case VARUINT:
         case UNDERSCORE:
         case ANY:
         case IDENTIFIER: {
-            if (tok.type == IDENTIFIER && (!strcmp(tok.lexeme, "varint") || !strcmp(tok.lexeme, "varuint"))) {
+            if (tok.type == VARINT || tok.type == VARUINT) {
                 size_t start = state->tokenIndex;
                 if (!parseSignatureType(state, 0)) return (expr){0};
                 struct expr_zero *prefix = calloc(1, sizeof(*prefix));
@@ -1432,7 +1434,7 @@ static char parseSignatureTypeImpl(parserState *state, size_t depth) {
             return signatureError(state, "mixed requires an array type []T");
         return 1;
     }
-    if (tok.type == IDENTIFIER && (!strcmp(tok.lexeme, "varint") || !strcmp(tok.lexeme, "varuint"))) {
+    if (tok.type == VARINT || tok.type == VARUINT) {
         advance(state);
         if (currentToken(state).type != LEFT_PAREN)
             return signatureError(state, !strcmp(tok.lexeme, "varuint") ? "varuint requires a bit width: varuint(n)" : "varint requires a bit width: varint(n)");
@@ -1678,11 +1680,11 @@ static char parseCastTarget(parserState *state, typeTokens *target) {
     } else {
         // Single names, buffer<...>, and [..]T need no parentheses; a following '*'
         // is multiplication. Legacy Name[...] is still parsed so it can be reported.
-        if (tok.type != IDENTIFIER && tok.type != ANY && tok.type != LEFT_BRACKET)
+        if (tok.type != IDENTIFIER && tok.type != ANY && tok.type != LEFT_BRACKET &&
+            tok.type != VARINT && tok.type != VARUINT)
             return signatureError(state, "Expected cast type; multi-token types require parentheses");
-        if (tok.type == LEFT_BRACKET ||
+        if (tok.type == LEFT_BRACKET || tok.type == VARINT || tok.type == VARUINT ||
             (tok.type == IDENTIFIER && ((!strcmp(tok.lexeme, "buffer") && peek(state).type == LESS_THAN) ||
-                                        !strcmp(tok.lexeme, "varint") || !strcmp(tok.lexeme, "varuint") ||
                                         peek(state).type == LEFT_BRACKET))) {
             char previous = state->castTarget;
             state->castTarget = 1;

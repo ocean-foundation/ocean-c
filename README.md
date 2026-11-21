@@ -339,7 +339,8 @@ The backend supports:
 - `int`/`i64` (signed 64-bit), `i32`, `i16`, `i8`, `uint`/`u64` (unsigned 64-bit), `u32`, `u16`, `u8`, `f32` (single precision), `float`/`f64` (double precision), `bool`,
   and `string` (an alias for `[]i8`). `varint(n)` and `varuint(n)` support signed
   and unsigned integer widths from 1 through 8,388,608 bits; prefer named types
-  such as `type Counter varuint(256);` for repeated use.
+  such as `type Counter varuint(256);` for repeated use. `varint` and `varuint`
+  are keywords and cannot be used as names.
 - Functions, recursion, forward calls, typed variadic parameters, multiple return
   values, named results, local variables, and lexical shadowing.
 - Function literals, shared mutable closures, structural `func(...)` types,

@@ -32,7 +32,7 @@ const enum tokenType keyword_types[] = {
     /*F32, STRING,*/ TYPE, STRUCT, FUNC, IMPORT,
     ANY, MIXED, INTERFACE, CONTINUE, BREAK, ENUM, IF, DEFER,
     SWITCH, FALLTHROUGH, EXTERN, FOR, GOTO, AS,
-    PACKAGE, ELSE, RANGE, RETURN, CASE, DEFAULT, NULL_KEYWORD, PANIC, MATCH, ASM,
+    PACKAGE, ELSE, RANGE, RETURN, CASE, DEFAULT, NULL_KEYWORD, PANIC, MATCH, VARINT, VARUINT, ASM,
 };
 
 const char *keywords[] = {
@@ -40,7 +40,7 @@ const char *keywords[] = {
     /*"f32", "string",*/ "type", "struct", "func", "import",
     "any", "mixed", "interface", "continue", "break", "enum", "if", "defer",
     "switch", "fallthrough", "extern", "for", "goto", "as",
-    "package", "else", "range", "return", "case", "default", "null", "panic", "match", "asm",
+    "package", "else", "range", "return", "case", "default", "null", "panic", "match", "varint", "varuint", "asm",
 };
 
 unsigned long hashes[NKEYWORDS] = {};

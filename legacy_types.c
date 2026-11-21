@@ -112,7 +112,7 @@ static size_t balanced(Legacy *g, size_t i) {
     return 0;
 }
 static int startsType(enum tokenType k) {
-    return k == IDENTIFIER || k == ANY || k == STAR || k == LEFT_BRACKET || k == FUNC ||
+    return k == IDENTIFIER || k == ANY || k == VARINT || k == VARUINT || k == STAR || k == LEFT_BRACKET || k == FUNC ||
            k == MIXED || k == STRUCT || k == INTERFACE;
 }
 
@@ -139,7 +139,7 @@ static size_t legacyBase(Legacy *g, size_t i, Text *out, int *changed) {
         return close;
     }
     // varint(n) / varuint(n): the parenthesized width belongs to the base type.
-    if ((named(g, i, "varint") || named(g, i, "varuint")) && kind(g, i + 1) == LEFT_PAREN) {
+    if ((k == VARINT || k == VARUINT) && kind(g, i + 1) == LEFT_PAREN) {
         size_t close = balanced(g, i + 1);
         if (!close) return 0;
         verbatim(g, out, i, close);

@@ -69,8 +69,11 @@ any       as        asm       break     case      continue  default
 defer     else      enum      extern    fallthrough         for
 func      goto      if        import    interface match     mixed
 null      package   panic     range     return    struct    switch
-type
+type      varint    varuint
 ```
+
+`varint` and `varuint` begin the parameterized integer types `varint(n)` and
+`varuint(n)` (§6.2.1) and must always be followed by `(width)`.
 
 **Not keywords** (they are ordinary identifiers that have special meaning only
 in certain positions): `true`, `false`, `sizeof`, `zero`, `make`, `new`, `len`,
@@ -104,10 +107,17 @@ int_lit     = decimal | '0x' hex_digits | '0X' hex_digits
 - There are no digit separators and no suffixes. A numeric literal immediately
   followed by a letter, digit, or `_` is an error (`1u`, `0x1g` are invalid).
 - Leading zeros in decimal are allowed and do **not** mean octal (`017 == 17`).
-- The magnitude must fit in an unsigned 64-bit integer (≤ 18446744073709551615);
-  otherwise it is an error.
-- A literal whose magnitude exceeds `INT64_MAX` has type `uint`; otherwise it is
-  an *untyped integer* that defaults to `int` (§7.4).
+- The magnitude may have at most 8,388,608 bits (the maximum parameterized
+  integer width, §6.2); a longer literal is an error. Decimal, hexadecimal,
+  binary, and octal literals all keep their exact value.
+- A literal whose magnitude fits in `INT64_MAX` is an *untyped integer* that
+  defaults to `int` (§7.4). One that exceeds `INT64_MAX` but fits in 64 bits has
+  type `uint`. One that exceeds 64 bits has type `varuint(k)`, where `k` is the
+  bit length of the magnitude (`18446744073709551616` and `0x1ffffffffffffffff`
+  are `varuint(65)`).
+- A negated literal below the `int` range has type `varint(k)` with the
+  smallest `k` that holds it (`-9223372036854775809` and
+  `-18446744073709551616` are `varint(65)`).
 - `-9223372036854775808` (a `-` immediately applied to the literal
   `9223372036854775808`) is folded to the `int` value `INT64_MIN`.
 
@@ -215,6 +225,7 @@ Type        = '*' Type                          (* pointer *)
             | '[' '...' ']' Type                (* array sized by its literal; literals only *)
             | 'mixed' '[' ']' Type              (* heterogeneous interface array *)
             | NamedType
+            | ( 'varint' | 'varuint' ) '(' int_lit ')'    (* parameterized integer, §6.2 *)
             | 'buffer' [ '<' Type [ ',' BufferSize ] '>' ]
             | 'map' '[' Type ']' Type
             | 'func' Params [ Results | Type ]
@@ -245,7 +256,9 @@ Notes:
   - `Square brackets go before the type for an array. Did you mean '[]int'?`
     (any form involving array brackets; `T*[]` suggests `[]*T`; `int[3][2]`
     suggests `[2][3]int`, preserving meaning);
-  - `The pointer star goes before the type. Did you mean '*T'?`;
+  - `The pointer star goes before the type. Did you mean '*T'?`
+    (`varint(4)[2]` suggests `[2]varint(4)`, and `varuint(8)*` suggests
+    `*varuint(8)`);
   - `A buffer's size is its second type argument. Did you mean 'buffer<int, 4>'?`.
   In expressions, `Type[...]{…}`, `Type[...]`, `buffer<T>[n]`, `Name<…>[n]`, and
   `T[n]` where `T` is a built-in type name are reported by the parser; `T[n]`
@@ -256,7 +269,8 @@ Notes:
 - **Angle-bracket closing.** When closing nested type arguments, a `>>` token is
   split into two `>`.
 - **Casts** (`->`) accept, without parentheses, a single-token type (`int`,
-  `MyType`, `any`), `buffer<…>`, or a bracket-prefixed array type (`x->[n]int`);
+  `MyType`, `any`), `varint(n)`/`varuint(n)`, `buffer<…>`, or a
+  bracket-prefixed array type (`x->[n]int`);
   a following `*` is multiplication. Every other target must be parenthesized:
   `x->(*int)`, `x->(pkg.T)`, `x->(Box<int>)`.
 
@@ -546,6 +560,7 @@ _, y := f();
 |---|---|
 | Signed integers | `i8`, `i16`, `i32`, `int` (= `i64`) |
 | Unsigned integers | `u8`, `u16`, `u32`, `uint` (= `u64`) |
+| Parameterized integers | `varint(n)` (signed), `varuint(n)` (unsigned), 1 ≤ n ≤ 8,388,608 |
 | Floating point | `f32`, `float` (= `f64`) |
 | Boolean | `bool` |
 | String | `string` |
@@ -564,7 +579,7 @@ _, y := f();
 | Defined/alias | `type N T`, `type N = T` |
 
 `i64`/`int`, `u64`/`uint`, and `f64`/`float` are identical pairs. The table
-above is the complete set of built-in scalar type names; there are no `byte`
+above is the complete set of built-in scalar types; there are no `byte`
 or `rune` types (those names are ordinary identifiers, and a program may
 declare them, e.g. `type byte = u8;`). Using an undeclared `byte` or `rune` as
 a type is an "unresolved type" error.
@@ -578,6 +593,47 @@ be indexed.
   information (stored as LLVM `i1`).
 - `float` is IEEE-754 binary64; `f32` binary32.
 - Arithmetic on integers **wraps** modulo 2ⁿ of the operation's type.
+
+#### 6.2.1 Parameterized integers: `varint(n)` and `varuint(n)`
+
+`varint(n)` is a signed two's-complement integer of exactly `n` bits, including
+the sign bit, with range −2ⁿ⁻¹ through 2ⁿ⁻¹−1. `varuint(n)` is unsigned, with
+range 0 through 2ⁿ−1. The width `n` must be an integer literal from 1 through
+8,388,608 (LLVM's maximum integer width); a name, constant expression, or
+out-of-range width is a syntax error.
+
+```
+small: varint(4) = -3;
+counter: varuint(256) = 0;
+mask := 0xff->varuint(12);
+```
+
+- **Identity.** Each width and signedness is its own built-in type.
+  `varint(32)` is not identical to `i32`, and `varint(64)` is not identical to
+  `int`. They interconvert implicitly by the ordinary integer widening rules
+  (§7.2): `varint(32)` and `i32` are mutually assignable, as are `varint(64)` and
+  `int`, `i8` is assignable to `varint(8)`, and `varuint(8)` to `varint(9)`.
+- **Named types.** `type nibble varint(4);` defines a distinct type, converted
+  with `3->nibble` and `x->int`. Untyped literals do not convert to it
+  (§7.2). An alias `type nibble = varint(4);` is identical to `varint(4)`.
+  Prefer a named type over repeating a width.
+- **Storage.** A value occupies the target ABI's allocation size and alignment
+  for an `n`-bit integer, which is always whole bytes. On x86-64,
+  `sizeof(varint(1))` and `sizeof(varint(4))` are 1, `sizeof(varint(12))` is 2,
+  `sizeof(varint(24))` is 4, `sizeof(varint(65))` is 16, and
+  `sizeof(varuint(256))` is 32.
+- **Arithmetic** wraps at the type's width: a `varint(4)` holding 7 becomes −8
+  after `++`, and a `varuint(4)` holding 15 becomes 0. `varuint` division,
+  remainder, comparison, and `>>` are unsigned. Result types are given in §9.2.
+- **Conversions.** Widening sign-extends `varint` and zero-extends `varuint`.
+  Narrowing requires `->` and truncates to the low `n` bits
+  (`300->varint(8)` is 44). Signed to unsigned always requires a cast.
+- **Containers.** Parameterized integers may be array, dynamic-array, pointer,
+  map, and buffer elements (`[3]varint(4)`, `[]varuint(8)`, `*varint(12)`), and
+  struct fields, including bitfields (§6.7.1).
+- **Boxing.** Boxing in `any` preserves the exact type, so `boxed.(varuint(128))`
+  recovers it. Values wider than 64 bits are boxed in owned heap storage that is
+  copied with the box.
 
 ### 6.3 Strings
 
@@ -691,7 +747,7 @@ elements. It can grow.
 StructDecl  = 'struct' identifier [ TypeParams ] [ ValueParams ] '{' { FieldDecl } '}' .
 ValueParams = '(' [ ValueGroup { ',' ValueGroup } [ ',' ] ] ')' .
 ValueGroup  = identifier { ',' identifier } Constraint .
-FieldDecl   = identifier { ',' identifier } Type ';' .
+FieldDecl   = identifier { ',' identifier } Type [ ':' int_lit ] ';' .
 ```
 
 - Fields are `name Type;`; grouped names share a type (`x, y int;`).
@@ -709,6 +765,39 @@ FieldDecl   = identifier { ',' identifier } Type ';' .
 - Runtime-sized buffers cannot be fields.
 - Struct values are copied by value (deeply for owned contents, §12).
 - Structs cannot be passed or returned by value through `extern` functions.
+
+#### 6.7.1 Bitfields
+
+A field declared `name T : size;` is a **bitfield** that stores only `size` bits.
+
+```
+struct Flags { low uint : 4; high uint : 4; ready bool : 1; }
+```
+
+- `size` is an integer literal from 1 through 64 (a syntax error otherwise) and
+  must not exceed the bit width of `T` (`bitfield size exceeds its type width`).
+  This 64-bit limit applies even when `T` is a wider parameterized integer.
+- `T` must be an integer type, a parameterized integer, a defined type or alias
+  of one, or `bool` with size 1. Other types are rejected
+  (`bitfield requires an integer or bool type`).
+- Grouped names share the size: in `a, b u8 : 3;` each field has 3 bits.
+- **Packing.** Consecutive bitfields are packed in declaration order, starting at
+  the least significant bit, into one storage unit, until the next bitfield would
+  take the unit past 64 bits. That field starts a new unit, and an ordinary field
+  ends the unit. A unit is an integer of the unit's total bits rounded up to whole
+  bytes, laid out with that integer's ABI size and alignment. On x86-64, `Flags`
+  above has size 2, `struct { a u8 : 4; b u8 : 4; }` has size 1,
+  `struct { a u64 : 32; b u64 : 32; }` has size 8, and
+  `struct { a u64 : 40; b u64 : 40; }` uses two units and has size 16.
+- **Reads** produce a value of type `T`. Signed fields sign-extend from the
+  field width, so storing 5 in an `int : 3` field reads back −3.
+- **Writes** truncate to the field width and leave neighboring fields unchanged.
+- A bitfield is not addressable: `&s.field` is an error, and so is calling a
+  pointer-receiver method on a bitfield, which would take its address implicitly.
+- **Warning.** When `T` is written directly as `varint(n)` or `varuint(n)` and
+  `size < n`, the compiler warns (`bitfield size 5 is smaller than explicit
+  varint(6)`) and compiles the field. Named types and aliases are exempt:
+  `type nibble varint(4); struct P { low nibble : 3; }` compiles silently.
 
 ### 6.8 Raw buffers
 
@@ -1000,8 +1089,9 @@ A constraint is a union of terms `T1 | T2 | ~T3`.
 ### 7.4 Untyped literals and default types
 
 Integer literals and character literals are untyped: they take the type demanded
-by context when the value fits (§7.2), and otherwise default to `int` (or `uint`
-if > `INT64_MAX`). In a binary operation with a typed integer operand, the
+by context when the value fits (§7.2), and otherwise default to `int` (or the
+`uint`, `varuint(k)`, or `varint(k)` type given in §2.5 when the value is
+outside the `int` range). In a binary operation with a typed integer operand, the
 literal takes the other operand's type if it fits. For example,
 `y: i8 = -2;` and `z: u32 = 531;` use the stated integer types.
 
@@ -1097,10 +1187,18 @@ There are no named constants; `sizeof` and `zero` are compile-time constants.
 - If either operand is floating: the result is the floating type (if both are
   floating and differ, `float`). Integer operands are converted.
 - Both integers with the same width and signedness: that type.
-- Same signedness, different widths: `int` (signed) or `uint` (unsigned).
-- Mixed signedness: `int` if the unsigned operand is narrower than 64 bits;
-  otherwise it is an error ("mixed signed and unsigned integers require an
-  explicit -> cast"). This also applies to `==`/`!=` and ordering comparisons.
+- Same signedness, different widths: the wider width, but at least 64 bits.
+  Operands up to 64 bits give `int` (signed) or `uint` (unsigned), so
+  `varint(4) + varint(8)` is `int`. A wider operand gives `varint(w)` or
+  `varuint(w)` for the wider width `w`.
+- Mixed signedness with both operands at most 64 bits: `int` if the unsigned
+  operand is narrower than 64 bits; otherwise it is an error ("mixed signed and
+  unsigned integers require an explicit -> cast").
+- Mixed signedness with an operand wider than 64 bits: `varint(w)`, where `w` is
+  the larger of the signed width and the unsigned width plus one, so
+  `varint(100) + varuint(100)` is `varint(101)`. It is an error if `w` would
+  exceed 8,388,608.
+- These rules also apply to `==`/`!=` and ordering comparisons.
 - Defined numeric types: both operands must be the identical defined type; the
   result has that type.
 
@@ -1269,7 +1367,7 @@ mixed []I{…}, []interface{…}{…}, map[K]V{…}
 ### 9.9 Address-of and dereference
 
 - `&x` for addressable `x` gives `*T`. Not allowed: map entries, `arr.data`,
-  immutable value-parameter fields, string elements.
+  immutable value-parameter fields, bitfields (§6.7.1), string elements.
 - `*p` requires a typed pointer; `*void` must be cast first. Dereferencing `null` traps.
 
 ### 9.10 Built-in functions and forms
@@ -1573,6 +1671,10 @@ ExternParam = Type [ identifier | '_' ] .
 - They must be called as `extern.name(args)`; a bare `name(...)` is an error.
 - Types must match the C ABI by hand (C `int` is `i32`; Ocean `int` is 64-bit).
   Use `buffer<i8>` for `char *`, `*void` for `void *`.
+- Parameterized integers of at most 64 bits pass as C integers of their storage
+  width. Passing an integer wider than 64 bits to an extern is an error
+  ("integers wider than 64 bits require an explicit narrowing cast for C
+  interoperability"). Narrow it with `->`, or pass a pointer to its storage.
 - Structs cannot be passed or returned by value.
 - `string.data` / `array.data` may be passed as a buffer argument. For strings,
   the callee receives an isolated temporary copy, valid only during the call.
@@ -1725,6 +1827,12 @@ executable. File paths are relative to the compiler's working directory.
   of its header reference (8 on 64-bit hosts); `sizeof([N]T)` includes the 8-byte
   size header.
 - `int` is 64-bit on every target, including Wasm (where pointers are 32-bit).
+- Parameterized integers lower to LLVM `iN`. Very large widths can take
+  substantial compile time and memory, and native code generation for them
+  depends on the installed LLVM target.
+- The standard library's `io` formatting does not yet recognize `varint(n)` or
+  `varuint(n)` values: `io.Println` prints `[unknown type]` for them. Convert to
+  a fixed-width integer first (`io.Println(x->int)`).
 
 ---
 
