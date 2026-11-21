@@ -128,7 +128,7 @@ Build Windows compilers with native LLVM/MinGW (MSYS2 CLANG64 or CLANGARM64),
 CMake, Make/Ninja, and target-matching libffi headers. Ocean programs require a
 Windows GNU/MinGW Clang toolchain on PATH. Decimal floating-point literals are
 converted directly to binary64 rather than accumulated in host `long double`, including on Windows ARM64.
-Integer literals use fixed 64-bit storage on every native host, including Windows where C `long` is 32-bit.
+Integer literals through 64 bits use fixed-width storage on every native host, including Windows where C `long` is 32-bit; larger literals retain their exact magnitude for wide integer types.
 Synthesized enum comparison and match tags use `long long` storage as well,
 preventing reads past a 32-bit `long` allocation on Windows.
 Windows LSP requests run in isolated re-executed workers with editor overlays;
@@ -370,6 +370,88 @@ not C `int`. Strings are immutable bytes; indexing reads a signed byte and `len`
 counts bytes. Character literals decode Unicode scalars. Identifiers support
 Unicode; exported names begin with Unicode uppercase letters.
 
+`varint(n)` is a built-in signed integer with exactly `n` bits including the sign bit, where
+`n` is an integer literal from 1 through 8388608. Its range is -2^(n-1) through
+2^(n-1)-1; storage occupies whole bytes with target ABI alignment. Casts that
+narrow truncate bits. Integer widening and fitting-literal rules also apply.
+It is idiomatic to define a custom type with `type nibble varint(4);` rather
+than repeat `varint(4)` at every use. Named types are distinct: initialize with
+`x := 3->nibble;` and convert back with `x->int`. Use `varint(4)` directly when
+an anonymous width is appropriate, for example `x: varint(4) = 3;`.
+`varint` and `varuint` are keywords: they cannot name variables, fields,
+parameters, functions, or types.
+
+`varuint(n)` is the unsigned counterpart of `varint(n)`, with an integer
+literal width from 1 through 8388608 and range 0 through 2^n-1. For example,
+`x: varuint(4) = 15; x++;` wraps to zero. Widening zero-extends; narrowing
+casts truncate. Signed-to-unsigned conversions require an explicit cast;
+unsigned-to-signed widening is implicit only if the signed destination can
+represent the full unsigned range. Division, remainder, comparisons, and
+right shifts use unsigned semantics. As with `varint`, prefer a named type
+such as `type nibble varuint(4);` for repeated use, initialized with
+`x := 15->nibble;`. Arrays, pointers, boxing, and bitfields support `varuint`.
+An explicit `varuint(6) : 5` bitfield warns and compiles; named types and
+aliases backed by `varuint` are exempt, just as for `varint`.
+
+Both parameterized integer families accept widths through **8,388,608 bits**,
+LLVM's inclusive maximum. Ordinary `int` and `uint` remain 64-bit. Decimal,
+hexadecimal, binary, and octal integer literals preserve their complete value.
+Literals exceeding `uint` infer `varuint(k)` with the minimum magnitude width;
+negative literals exceeding the ordinary range infer a fitting signed width.
+Integer literals used as floats round once to the destination width; one too
+large for it becomes infinity with a warning, unless explicitly cast with `->f64`.
+Prefer an explicit destination or named type for a stable storage width:
+
+```ocean
+type Counter varuint(256);
+value: varuint(128) = 340282366920938463463374607431768211455;
+count := 340282366920938463463374607431768211456->Counter;
+```
+
+Signed widening sign-extends and unsigned widening zero-extends. Integer arithmetic on identical types keeps that type. With one signedness the
+wider operand's type wins (`i32 + i16` is `i32`, `u16 + u8` is `u16`); distinct
+types of one width give the standard type (`varint(32) + i32` is `i32`). Mixed
+signedness gives a signed type of the wider width (`i64 + u64` is `i64`,
+`i8 + u32` is `i32`); only when both operands are `varint`/`varuint` does it grow
+to hold both ranges (`varint(64) + varuint(64)` is `varint(65)`,
+`varint(64) + varuint(63)` is `varint(64)`). Results wrap at their width.
+Fitting literals use the other operand's type. `x op= y` is valid only when
+`x op y` is and its result is assignable to `x` (`i32 += i16` works,
+`u8 += u16` does not).
+Boxed values wider than 64 bits use owned heap storage and retain their exact
+type and value through copies, containers, and reflection. Very large widths
+can require substantial compilation time and memory; native lowering also
+depends on the installed LLVM target. C scalar interoperability is limited to
+64 bits: explicitly narrow a fitting value or pass a pointer to wide storage.
+Extern parameters and results may only use widths C has (8, 16, 32, or 64
+bits); C variadic arguments sign- or zero-extend to `int` or `long long`.
+Boxed wide integers cannot be passed directly to C variadic formatting.
+Standard-library `io.ParseInt` still returns a 64-bit `int`.
+Bitfield sizes remain 1–64 bits, even when their backing integer is wider.
+
+Struct bitfields use `name T : size;`, for example:
+
+```ocean
+struct Flags { low uint : 4; high uint : 4; ready bool : 1; }
+```
+
+The size is an integer literal from 1 through 64, no greater than the backing
+type's width. Integer types, named integer types, and `bool` (size 1) are
+supported. Consecutive bitfields pack in declaration order, starting at the low
+bits, into shared storage of at most 64 bits; an ordinary field starts separate
+storage. Each group uses whole bytes and target ABI alignment. Two adjacent
+4-bit fields occupy one byte. Reads preserve the declared type and sign-extend
+signed fields from their field width. Writes truncate to the field width and
+preserve neighboring fields; an assignment or prefix `++`/`--` yields the
+stored value. Bitfields cannot have their address taken, including implicit
+borrowing for a pointer receiver. `any` fields and enum payload fields cannot
+be bitfields.
+
+An explicitly written `varint(n)` field with a smaller bitfield size produces a
+warning and still compiles: `struct Small { num varint(6) : 5; }`. This warning
+does not apply to named types or aliases backed by `varint`, such as
+`type nibble varint(4); struct Packed { low nibble : 3; }`.
+
 Integer variables convert implicitly only when the destination represents the full
 source range: `i8` to `i32`, `u8` to `u16`, and `u8` to `i16` work. Narrowing,
 signed-to-unsigned conversions, and unsigned-to-signed conversions without an
@@ -378,9 +460,16 @@ initializers, assignments, returns, and collection elements. Fitting integer
 literals may directly initialize or supply narrower types (`small: i8 = 42`);
 integer expressions and variables are checked by type, not their current value.
 Pointer and collection element storage types must match; scalar widening does
-not convert an `[]i8` into an `[]i32`. Mixed-width integer arithmetic promotes
-to 64 bits; fitting literals use the other operand's type. Mixed signed/unsigned
-arithmetic needs a cast if no signed 64-bit type can represent both ranges.
+not convert an `[]i8` into an `[]i32`. Integer arithmetic on identical types keeps that type. With one signedness the
+wider operand's type wins (`i32 + i16` is `i32`, `u16 + u8` is `u16`); distinct
+types of one width give the standard type (`varint(32) + i32` is `i32`). Mixed
+signedness gives a signed type of the wider width (`i64 + u64` is `i64`,
+`i8 + u32` is `i32`); only when both operands are `varint`/`varuint` does it grow
+to hold both ranges (`varint(64) + varuint(64)` is `varint(65)`,
+`varint(64) + varuint(63)` is `varint(64)`). Results wrap at their width.
+Fitting literals use the other operand's type. `x op= y` is valid only when
+`x op y` is and its result is assignable to `x` (`i32 += i16` works,
+`u8 += u16` does not).
 
 Integer literals (including negative literals) automatically convert in float contexts,
 including typed initializers, assignments, arguments, returns, arithmetic, and
@@ -697,8 +786,9 @@ items["three"] = true;
 ```
 
 Keys use Ocean equality: strings and aggregates compare contents, pointers
-compare addresses, and boxed primitive numbers use existing numeric equality.
-For example, keys `1` and `1.0` refer to the same entry in `map[any]V`.
+compare addresses, and boxed primitive numbers compare by exact value.
+Keys `1` and `1.0` refer to the same entry in `map[any]V`. A boxed integer
+and float compare equal only when the float represents that exact integer.
 Positive and negative floating zero are equal; NaN keys are unequal to themselves.
 Copies of maps own independent keys and values recursively. Maps compare equal
 when they have the same entries, regardless of insertion order or capacity.
@@ -789,6 +879,7 @@ ordinary fields, initialized once in literals such as `Matrix{2, 3}`.
 
 A defined type needs explicit casts to/from its underlying type; aliases do not.
 Boxing a defined type in `any` preserves its concrete type identity.
+If `x` is `any`, `z := (x = y)` gives `z` the boxed value stored in `x`.
 Generic constraints include interfaces, unions, `~T` underlying types, and struct
 families (`Box` versus `Box<int>`). Boxed `any` values support type assertions
 and type switches. `value.(T)` traps on a mismatch; the two-binding form

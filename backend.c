@@ -48,7 +48,12 @@ static void emitTarget(FILE *out) {
 #define BOOL OCEAN_KIND_BOOL
 #define UINT OCEAN_KIND_UINT
 #endif
-typedef enum { VOID, INT, I32, FLOAT, BOOL, RAW_POINTER, I8, BAD, NULL_VALUE, SCALAR_ANY, I16, F32, UINT, U32, U16, U8, BUFFER } Kind;
+typedef enum { VOID, INT, I32, FLOAT, BOOL, RAW_POINTER, I8, BAD, NULL_VALUE, SCALAR_ANY, I16, F32, UINT, U32, U16, U8, BUFFER, VARINT_BASE = 16777216, VARUINT_BASE = 33554432 } Kind;
+static unsigned parameterizedIntegerWidth(Kind kind) {
+    if (kind > VARINT_BASE && kind <= VARINT_BASE + OCEAN_MAX_INTEGER_BITS) return kind - VARINT_BASE;
+    if (kind > VARUINT_BASE && kind <= VARUINT_BASE + OCEAN_MAX_INTEGER_BITS) return kind - VARUINT_BASE;
+    return 0;
+}
 typedef struct {
     Kind kind;
     const char *operand; // Backend-owned text; aggregate constants can be arbitrarily long.
@@ -60,6 +65,8 @@ typedef struct {
     int homogeneousDynamic;
     const char *homogeneousArray; // Indexed writes retain the array element identity.
     Kind elementRequirement;
+    unsigned bitWidth, bitOffset;
+    Kind bitStorage; // Packed bitfield lvalue metadata.
     Kind backingKind; // A .data argument retains its source through a deferred call.
     const char *backingOperand;
     const char *length; // Lexical metadata for a sized raw buffer.
@@ -110,6 +117,9 @@ typedef struct BufferKind {
     int emptyEmitted; // Empty array headers have module lifetime, including returned zeros.
     const char *zeroOperand; // Cached LLVM constant for a concrete aggregate's default value.
     Kind *members;
+    size_t *fieldIndices;
+    unsigned *fieldOffsets;
+    Kind *fieldStorage;
     size_t count;
     char *ir;
     char *layout; // Inline byte-size header and payload layout for built-in arrays.
@@ -304,7 +314,15 @@ static int definedKind(Backend *b, Kind kind) {
     BufferKind *t = bufferKind(b, kind);
     return t && t->definition;
 }
+static const char *integerIRType(Backend *, unsigned);
+static int wideInteger(Backend *b, Kind kind) {
+    return parameterizedIntegerWidth(representationKind(b, kind)) > 64;
+}
 static const char *irType(Backend *b, Kind k) {
+    Kind scalar = representationKind(b, k);
+    if (parameterizedIntegerWidth(scalar)) {
+        return integerIRType(b, parameterizedIntegerWidth(scalar));
+    }
     BufferKind *buffer = bufferKind(b, k);
     if (buffer)
         return buffer->ir;
@@ -397,7 +415,12 @@ static const char *nativeKindIdentity(Backend *, Kind);
 static void nativeDeferredIdentity(Backend *, unsigned);
 static void nativeConstantIdentity(Backend *, const char *, const void *, size_t);
 static void finishNativeModules(Backend *, FILE *);
+static const char *integerIRType(Backend *b, unsigned width) {
+    return value(b, RAW_POINTER, "i%u", width).operand;
+}
 static Value temp(Backend *b, Kind k) { return value(b, k, "%%v%u", ++b->next); }
+static int integral(Backend *, Kind);
+static int integerWidth(Backend *, Kind);
 static Value aggregateEquality(Backend *, Value, Value);
 static Value boxedEquality(Backend *, enum binaryExprType, Value, Value);
 static Value specializedClosureValue(Backend *, expr *, int);
@@ -798,6 +821,35 @@ static Kind recordKind(Backend *b, struct stmt_struct *record, Kind *arguments, 
             fail(b, "runtime-sized inline struct fields are unsupported; use an unsized buffer or array reference");
             v->members[i] = BAD;
         } else v->members[i] = recordFieldKind(b, record->fieldTypes[i]);
+        if (record->fieldBits && record->fieldBits[i]) {
+            Kind scalar = representationKind(b, v->members[i]);
+            if (!integral(b, scalar) && scalar != BOOL) fail(b, "bitfield requires an integer or bool type");
+            else if (record->fieldBits[i] > (unsigned)(scalar == BOOL ? 1 : integerWidth(b, scalar)))
+                fail(b, "bitfield size exceeds its type width");
+        }
+    }
+    int hasBits = 0;
+    for (size_t i = 0; i < v->count; i++)
+        if (record->fieldBits && record->fieldBits[i]) hasBits = 1;
+    if (hasBits) {
+        v->fieldIndices = checked(sizeof(size_t) * v->count);
+        v->fieldOffsets = checked(sizeof(unsigned) * v->count);
+        v->fieldStorage = checked(sizeof(Kind) * v->count);
+        size_t physical = 0;
+        for (size_t i = 0; i < v->count;) {
+            unsigned bits = record->fieldBits[i];
+            if (!bits) {
+                v->fieldIndices[i] = physical++; v->fieldStorage[i] = v->members[i]; i++; continue;
+            }
+            size_t end = i; unsigned total = 0;
+            while (end < v->count && record->fieldBits[end] && total + record->fieldBits[end] <= 64) {
+                v->fieldIndices[end] = physical; v->fieldOffsets[end] = total;
+                total += record->fieldBits[end++];
+            }
+            Kind storage = (Kind)(VARINT_BASE + ((total + 7) / 8) * 8);
+            for (; i < end; i++) v->fieldStorage[i] = storage;
+            physical++;
+        }
     }
     b->recordDepth--;
     b->typeBindings = previous;
@@ -1128,6 +1180,11 @@ static Kind type(Backend *b, typeTokens t) {
                    ? arrayKind(b, k, (size_t)dimension.tokens[0].numValue.integer)
                    : pointerBufferKind(b, k);
     }
+    if (t.nTokens == 4 && (!strcmp(t.tokens[0].lexeme, "varint") || !strcmp(t.tokens[0].lexeme, "varuint")) &&
+        t.tokens[1].type == LEFT_PAREN && t.tokens[2].type == LITERAL_INT &&
+        t.tokens[3].type == RIGHT_PAREN && t.tokens[2].numValue.integer >= 1 &&
+        !t.tokens[2].wideInteger && t.tokens[2].numValue.integer <= OCEAN_MAX_INTEGER_BITS)
+        return (Kind)((!strcmp(t.tokens[0].lexeme, "varuint") ? VARUINT_BASE : VARINT_BASE) + t.tokens[2].numValue.integer);
     if (t.tokens[0].type == STAR)
         return pointerKind(b, type(b, (typeTokens){t.nTokens - 1, t.tokens + 1}));
     if (t.nTokens == 1)
@@ -1597,21 +1654,66 @@ static void clearScope(Scope *s) {
         free(v);
     }
 }
-static int unsignedInteger(Backend *b, Kind k) { k = representationKind(b, k); return k == UINT || k == U32 || k == U16 || k == U8; }
-static int integral(Backend *b, Kind k) { k = representationKind(b, k); return k == INT || k == I32 || k == I16 || k == I8 || unsignedInteger(b, k); }
+static int unsignedInteger(Backend *b, Kind k) { k = representationKind(b, k); return (k > VARUINT_BASE && k <= VARUINT_BASE + OCEAN_MAX_INTEGER_BITS) || k == UINT || k == U32 || k == U16 || k == U8; }
+static int integral(Backend *b, Kind k) { k = representationKind(b, k); return (k > VARINT_BASE && k <= VARINT_BASE + OCEAN_MAX_INTEGER_BITS) || k == INT || k == I32 || k == I16 || k == I8 || unsignedInteger(b, k); }
 static BufferKind *typedPointer(Backend *b, Kind kind) {
     BufferKind *type = bufferKind(b, representationKind(b, kind));
     return type && type->shape == 6 ? type : NULL;
 }
 static int floating(Backend *b, Kind k) { k = representationKind(b, k); return k == FLOAT || k == F32; }
-static int integerWidth(Backend *b, Kind k) { k = representationKind(b, k); return (k == I8 || k == U8) ? 8 : (k == I16 || k == U16) ? 16 : (k == I32 || k == U32) ? 32 : 64; }
-// Mixed-width arithmetic uses 64-bit storage. Prefer signed storage when it
-// can represent both operand ranges; semantics rejects unsafe signed/u64 pairs.
+static int integerWidth(Backend *b, Kind k) { k = representationKind(b, k); return parameterizedIntegerWidth(k) ? parameterizedIntegerWidth(k) : (k == I8 || k == U8) ? 8 : (k == I16 || k == U16) ? 16 : (k == I32 || k == U32) ? 32 : 64; }
+static Kind promotedScalarKind(Backend *b, Kind kind) {
+    Kind scalar = representationKind(b, kind);
+    unsigned width = parameterizedIntegerWidth(scalar);
+    if (width > 64) return kind;
+    if (width) {
+        if (!unsignedInteger(b, scalar)) return width <= 32 ? I32 : INT;
+        return width < 32 ? I32 : width == 32 ? U32 : UINT;
+    }
+    if (scalar == BOOL || scalar == I8 || scalar == I16 || scalar == U8 || scalar == U16) return I32;
+    return scalar == F32 ? FLOAT : kind;
+}
+// Mixed-width arithmetic retains at least 64 bits and both operand ranges.
+// Existing signed/u64 pairs still require an explicit cast at widths <= 64.
+// Mirrors the checker's commonIntegerType (§9.2): identical kinds stay; one
+// signedness takes the wider operand (equal widths: the standard kind); mixed
+// signedness takes a signed kind of the wider width, growing to
+// max(signed width, unsigned width + 1) bits only when both are varint/varuint,
+// and keeps the signed operand's kind when it already has the result width.
+static Kind canonicalIntegerKind(unsigned width, int isUnsigned) {
+    switch (width) {
+    case 8: return isUnsigned ? U8 : I8;
+    case 16: return isUnsigned ? U16 : I16;
+    case 32: return isUnsigned ? U32 : I32;
+    case 64: return isUnsigned ? UINT : INT;
+    default: return (Kind)((isUnsigned ? VARUINT_BASE : VARINT_BASE) + width);
+    }
+}
+// A kind that represents every value of both integer kinds exactly: the wider
+// width for one signedness, otherwise a signed kind of max(signed width,
+// unsigned width + 1) bits. Used where values must compare mathematically.
+static Kind commonIntegerKind(Backend *, Kind, Kind);
+static Kind exactComparisonKind(Backend *b, Kind a, Kind c) {
+    unsigned aw = integerWidth(b, a), cw = integerWidth(b, c);
+    int au = unsignedInteger(b, a), cu = unsignedInteger(b, c);
+    if (au == cu) return canonicalIntegerKind(aw > cw ? aw : cw, au);
+    unsigned uw = au ? aw : cw, sw = au ? cw : aw, width = sw > uw ? sw : uw + 1;
+    return width > OCEAN_MAX_INTEGER_BITS ? commonIntegerKind(b, a, c) : canonicalIntegerKind(width, 0);
+}
 static Kind commonIntegerKind(Backend *b, Kind a, Kind c) {
-    if (unsignedInteger(b, a) && unsignedInteger(b, c)) return UINT;
-    if (!unsignedInteger(b, a) && !unsignedInteger(b, c)) return INT;
-    Kind unsignedKind = unsignedInteger(b, a) ? a : c;
-    return integerWidth(b, unsignedKind) < 64 ? INT : UINT;
+    if (a == c) return a;
+    unsigned aw = integerWidth(b, a), cw = integerWidth(b, c);
+    int au = unsignedInteger(b, a), cu = unsignedInteger(b, c);
+    if (au == cu) {
+        if (aw != cw) return aw > cw ? a : c;
+        return canonicalIntegerKind(aw, au);
+    }
+    unsigned uw = au ? aw : cw, sw = au ? cw : aw, width = sw > uw ? sw : uw;
+    if (parameterizedIntegerWidth(representationKind(b, a)) && parameterizedIntegerWidth(representationKind(b, c)) && uw >= sw)
+        width = uw + 1;
+    if (width == sw) return au ? c : a;
+    if (width > OCEAN_MAX_INTEGER_BITS) { fail(b, "mixed integer width exceeds LLVM maximum; use an explicit cast"); return BAD; }
+    return canonicalIntegerKind(width, 0);
 }
 static int implicitVoidPointer(Backend *b, Kind source, Kind target) {
     BufferKind *from = bufferKind(b, source), *to = bufferKind(b, target);
@@ -1660,8 +1762,10 @@ static Value convert(Backend *b, Value v, Kind k) {
         op = unsignedInteger(b, v.kind) ? "uitofp" : "sitofp";
     if (floating(b, v.kind) && integral(b, k))
         op = unsignedInteger(b, k) ? "fptoui" : "fptosi";
-    if (representationKind(b, v.kind) == BOOL && integral(b, k))
+    if (representationKind(b, v.kind) == BOOL && integral(b, k)) {
+        if (integerWidth(b, k) == 1) return value(b, k, "%s", v.operand);
         op = "zext";
+    }
     if (integral(b, v.kind) && integral(b, k)) {
         if (integerWidth(b, v.kind) == integerWidth(b, k)) return value(b, k, "%s", v.operand);
         op = integerWidth(b, v.kind) < integerWidth(b, k) ? (unsignedInteger(b, v.kind) ? "zext" : "sext") : "trunc";
@@ -1687,7 +1791,52 @@ static Value boxArray(Backend *, Value);
 static int ownsArrays(Backend *, Kind);
 static Value copyValue(Backend *, Value, unsigned);
 static void copyInto(Backend *, Value, Value, unsigned);
+// Bitfields use read-modify-write so neighboring fields retain their values.
+static Value decodeBitfield(Backend *b, Value packed, Kind kind, unsigned bits, unsigned offset) {
+    if (offset) {
+        Value shifted = temp(b, packed.kind);
+        fprintf(b->body, "  %s = lshr %s %s, %u\n", shifted.operand, irType(b, packed.kind), packed.operand, offset);
+        packed = shifted;
+    }
+    Kind narrow = (Kind)(VARINT_BASE + bits);
+    Value part = convert(b, packed, narrow);
+    if (representationKind(b, kind) == BOOL) return value(b, kind, "%s", part.operand);
+    if (integerWidth(b, kind) == (int)bits) return value(b, kind, "%s", part.operand);
+    Value result = temp(b, kind);
+    fprintf(b->body, "  %s = %s %s %s to %s\n", result.operand,
+            unsignedInteger(b, kind) ? "zext" : "sext", irType(b, narrow), part.operand, irType(b, kind));
+    return result;
+}
+static Value encodeBitfield(Backend *b, Value packed, Value member, unsigned bits, unsigned offset) {
+    Kind narrow = (Kind)(VARINT_BASE + bits);
+    Value part = representationKind(b, member.kind) == BOOL
+        ? value(b, narrow, "%s", member.operand) : convert(b, member, narrow);
+    Value extended = part;
+    if (integerWidth(b, packed.kind) != (int)bits) {
+        extended = temp(b, packed.kind);
+        fprintf(b->body, "  %s = zext %s %s to %s\n", extended.operand, irType(b, narrow), part.operand, irType(b, packed.kind));
+    } else extended.kind = packed.kind;
+    if (offset) {
+        Value shifted = temp(b, packed.kind);
+        fprintf(b->body, "  %s = shl %s %s, %u\n", shifted.operand, irType(b, packed.kind), extended.operand, offset);
+        extended = shifted;
+    }
+    uint64_t mask = bits == 64 ? UINT64_MAX : ((UINT64_C(1) << bits) - 1) << offset;
+    unsigned storageBits = integerWidth(b, packed.kind);
+    uint64_t keep = ~mask & (storageBits == 64 ? UINT64_MAX : (UINT64_C(1) << storageBits) - 1);
+    Value cleared = temp(b, packed.kind), result = temp(b, packed.kind);
+    fprintf(b->body, "  %s = and %s %s, %llu\n", cleared.operand, irType(b, packed.kind), packed.operand, (unsigned long long)keep);
+    fprintf(b->body, "  %s = or %s %s, %s\n", result.operand, irType(b, packed.kind), cleared.operand, extended.operand);
+    return result;
+}
 static void rawStore(Backend *b, Value address, Value v) {
+    if (address.bitWidth) {
+        Value packed = temp(b, address.bitStorage);
+        fprintf(b->body, "  %s = load %s, ptr %s\n", packed.operand, irType(b, packed.kind), address.operand);
+        Value updated = encodeBitfield(b, packed, coerce(b, v, address.kind), address.bitWidth, address.bitOffset);
+        fprintf(b->body, "  store %s %s, ptr %s\n", irType(b, updated.kind), updated.operand, address.operand);
+        return;
+    }
     BufferKind *target = bufferKind(b, address.kind);
     if (v.kind != address.kind && v.kind != NULL_VALUE &&
         (definedKind(b, v.kind) || definedKind(b, address.kind))) { fail(b, "distinct type requires an explicit cast"); return; }
@@ -1797,6 +1946,11 @@ static void store(Backend *b, Value address, Value v) {
     rawStore(b, address, v);
 }
 static Value load(Backend *b, Value address) {
+    if (address.bitWidth) {
+        Value packed = temp(b, address.bitStorage);
+        fprintf(b->body, "  %s = load %s, ptr %s\n", packed.operand, irType(b, packed.kind), address.operand);
+        return decodeBitfield(b, packed, address.kind, address.bitWidth, address.bitOffset);
+    }
     Value v = temp(b, address.kind);
     v.owner = address.owner;
     v.throughPointer = address.throughPointer;
@@ -1809,6 +1963,15 @@ static Value bufferLiteralSlot(Backend *, Kind);
 // native endian; narrow values occupy the beginning of an aligned eight-byte slot.
 static const char *ffiType(Backend *b, Kind kind) {
     kind = representationKind(b, kind);
+    if (wideInteger(b, kind)) { fail(b, "integers wider than 64 bits require an explicit narrowing cast for C interoperability"); return "@ffi_type_void"; }
+    if (parameterizedIntegerWidth(kind)) {
+        unsigned bits = parameterizedIntegerWidth(kind);
+        if (unsignedInteger(b, kind))
+            return bits <= 8 ? "@ffi_type_uint8" : bits <= 16 ? "@ffi_type_uint16" :
+                   bits <= 32 ? "@ffi_type_uint32" : "@ffi_type_uint64";
+        return bits <= 8 ? "@ffi_type_sint8" : bits <= 16 ? "@ffi_type_sint16" :
+               bits <= 32 ? "@ffi_type_sint32" : "@ffi_type_sint64";
+    }
     if (kind == VOID) return "@ffi_type_void";
     if (kind == UINT) return "@ffi_type_uint64";
     if (kind == U32) return "@ffi_type_uint32";
@@ -1870,11 +2033,11 @@ static Value boxScalar(Backend *b, Value v, int promote) {
     if (promote != 2) reflectionInput(b, v.kind);
     Kind identity = v.kind;
     // Preserve Ocean identity while keeping small scalars ready for C varargs.
-    if (representationKind(b, v.kind) == BOOL || representationKind(b, v.kind) == I8 || representationKind(b, v.kind) == I16 || representationKind(b, v.kind) == U8 || representationKind(b, v.kind) == U16) v = convert(b, v, I32);
-    if (representationKind(b, v.kind) == F32) v = convert(b, v, FLOAT);
+    Kind promoted = promotedScalarKind(b, v.kind);
+    if (promoted != v.kind) v = convert(b, v, promoted);
     BufferKind *t = bufferKind(b, v.kind);
     Value metadata = anyMetadata(b, identity);
-    if (t && (t->shape == 2 || t->shape == 4 || t->shape == 5 || t->shape == 17 || !t->shape || (t->definition && representationKind(b, t->kind) == SCALAR_ANY))) {
+    if (wideInteger(b, v.kind) || (t && (t->shape == 2 || t->shape == 4 || t->shape == 5 || t->shape == 17 || !t->shape || (t->definition && representationKind(b, t->kind) == SCALAR_ANY)))) {
         Value address = slot(b, v.kind), result = temp(b, SCALAR_ANY);
         rawStore(b, address, v);
         fprintf(b->body, "  %s = call { ptr, i64 } @__ocean.any.box.%u(ptr %s)\n",
@@ -1894,6 +2057,12 @@ static Value boxScalar(Backend *b, Value v, int promote) {
 // Fixed C parameters retain their declared ABI rather than vararg promotion.
 static Value boxFixedCScalar(Backend *b, Value v) {
     v.kind = representationKind(b, v.kind);
+    // varint(8|16) and varuint(8|16) have the same IR type and C layout as the
+    // fixed kinds, so describe them to libffi at their declared width too.
+    unsigned parameterized = parameterizedIntegerWidth(v.kind);
+    if (parameterized == 8 || parameterized == 16)
+        v.kind = parameterized == 8 ? (unsignedInteger(b, v.kind) ? U8 : I8)
+                                    : (unsignedInteger(b, v.kind) ? U16 : I16);
     if (v.kind != F32 && v.kind != I16 && v.kind != I8 && v.kind != U8 && v.kind != U16 && v.kind != BOOL)
         return boxScalar(b, v, 0);
     b->ffiUsed = 1;
@@ -1914,7 +2083,7 @@ static Value unboxMatched(Backend *b, Value box, Kind kind) {
     Value storage = slot(b, INT);
     rawStore(b, storage, bits);
     BufferKind *t = bufferKind(b, kind);
-    if (t && (t->shape == 2 || t->shape == 4 || t->shape == 5 || t->shape == 17 || !t->shape || (t->definition && representationKind(b, t->kind) == SCALAR_ANY))) {
+    if (wideInteger(b, kind) || (t && (t->shape == 2 || t->shape == 4 || t->shape == 5 || t->shape == 17 || !t->shape || (t->definition && representationKind(b, t->kind) == SCALAR_ANY)))) {
         Value result = temp(b, kind);
         fprintf(b->body, "  %s = call %s @__ocean.any.unbox.%u(i64 %s)\n",
                 result.operand, irType(b, kind), (unsigned)kind, bits.operand);
@@ -2046,19 +2215,31 @@ static Value extract(Backend *b, Value aggregate, size_t index) {
         fail(b, "invalid aggregate extraction");
         return value(b, BAD, "0");
     }
+    size_t physical = t->fieldIndices ? t->fieldIndices[index] : index;
+    if (t->fieldIndices && t->record->fieldBits[index]) {
+        Value packed = temp(b, t->fieldStorage[index]);
+        fprintf(b->body, "  %s = extractvalue %s %s, %zu\n", packed.operand, t->ir, aggregate.operand, physical);
+        return decodeBitfield(b, packed, t->members[index], t->record->fieldBits[index], t->fieldOffsets[index]);
+    }
     Value result = temp(b, t->shape ? t->members[index] : t->element);
     fprintf(b->body, "  %s = extractvalue %s %s, %s%zu\n", result.operand, t->ir, aggregate.operand,
-            t->fixedArray && !t->shape ? "1, " : "", index);
+            t->fixedArray && !t->shape ? "1, " : "", physical);
     return result;
 }
 static Value insert(Backend *b, Value aggregate, Value member, size_t index) {
     BufferKind *t = bufferKind(b, aggregate.kind);
     Kind expected = t->shape ? t->members[index] : t->element;
     member = coerce(b, member, expected);
+    size_t physical = t->fieldIndices ? t->fieldIndices[index] : index;
+    if (t->fieldIndices && t->record->fieldBits[index]) {
+        Value packed = temp(b, t->fieldStorage[index]);
+        fprintf(b->body, "  %s = extractvalue %s %s, %zu\n", packed.operand, t->ir, aggregate.operand, physical);
+        member = encodeBitfield(b, packed, member, t->record->fieldBits[index], t->fieldOffsets[index]);
+    }
     Value result = temp(b, aggregate.kind);
     fprintf(b->body, "  %s = insertvalue %s %s, %s %s, %s%zu\n", result.operand, t->ir,
             aggregate.operand, irType(b, member.kind), member.operand,
-            t->fixedArray && !t->shape ? "1, " : "", index);
+            t->fixedArray && !t->shape ? "1, " : "", physical);
     return result;
 }
 static Value storageSize(Backend *b, Kind k) {
@@ -2234,6 +2415,11 @@ static Kind expressionKind(Backend *b, expr *e) {
     case EXPR_TYPE_LITERAL: {
         struct expr_literal *literal = e->underlying;
         if (literal->type == LITERAL_TYPE_NULL) return NULL_VALUE;
+        if (literal->type == LITERAL_TYPE_INT && literal->wideInteger) {
+            unsigned width = literal->integerBits + (literal->negativeWide && !literal->integerPowerOfTwo);
+            if (width == 64) return literal->negativeWide ? INT : UINT;
+            return (Kind)((literal->negativeWide ? VARINT_BASE : VARUINT_BASE) + width);
+        }
         if (literal->type == LITERAL_TYPE_INT && literal->unsignedLiteral) return UINT;
         if (literal->type == LITERAL_TYPE_FLOAT) return literal->singlePrecision ? F32 : FLOAT;
         return literal->type == LITERAL_TYPE_STRING ? stringKind(b) : INT;
@@ -2839,8 +3025,13 @@ static void copyInto(Backend *b, Value destination, Value source, unsigned depth
     for (size_t i = 0; i < t->count; i++) {
         Kind member = t->shape ? t->members[i] : t->element;
         Value address = temp(b, member);
+        if (t->fieldIndices) {
+            address.bitWidth = t->record->fieldBits[i]; address.bitOffset = t->fieldOffsets[i];
+            address.bitStorage = t->fieldStorage[i];
+        }
         fprintf(b->body, "  %s = getelementptr %s, ptr %s, i32 0, %s%s %zu\n", address.operand, t->ir,
-                destination.operand, t->fixedArray && !t->shape ? "i32 1, " : "", t->shape ? "i32" : "i64", i);
+                destination.operand, t->fixedArray && !t->shape ? "i32 1, " : "", t->shape ? "i32" : "i64",
+                t->fieldIndices ? t->fieldIndices[i] : i);
         copyInto(b, address, extract(b, source, i), depth + 1);
     }
 }
@@ -3308,7 +3499,8 @@ static Value emptyValue(Backend *b, Kind kind) {
         }
         fputs(record ? "{ " : "[ ", constant);
         for (size_t i = 0; i < t->count; i++) {
-            Kind member = record ? t->members[i] : t->element;
+            if (t->fieldIndices && i && t->fieldIndices[i] == t->fieldIndices[i - 1]) continue;
+            Kind member = t->fieldStorage ? t->fieldStorage[i] : record ? t->members[i] : t->element;
             Value zero = emptyValue(b, member);
             fprintf(constant, "%s%s %s", i ? ", " : "", irType(b, member), zero.operand);
         }
@@ -3527,8 +3719,12 @@ static Value address(Backend *b, expr *e) {
                 result.ownedArrayElement = base.ownedArrayElement;
                 result.owner = base.owner;
                 result.throughPointer = base.throughPointer;
+                if (t->fieldIndices) {
+                    result.bitWidth = t->record->fieldBits[i];
+                    result.bitOffset = t->fieldOffsets[i]; result.bitStorage = t->fieldStorage[i];
+                }
                 fprintf(b->body, "  %s = getelementptr %s, ptr %s, i32 0, i32 %zu\n",
-                        result.operand, t->ir, base.operand, i);
+                        result.operand, t->ir, base.operand, t->fieldIndices ? t->fieldIndices[i] : i);
                 return result;
             }
             fail(b, "unknown struct field");
@@ -3832,9 +4028,14 @@ static Value binary(Backend *, enum binaryExprType, Value, Value);
 static int runtimeOperator(Backend *b, enum binaryExprType op, Kind a, Kind c) {
     int comparison = op >= EXPR_EQUALITY && op <= EXPR_GREATER_EQUALS;
     if ((integral(b, a) || floating(b, a)) && (integral(b, c) || floating(b, c))) {
-        if (integral(b, a) && integral(b, c) && unsignedInteger(b, a) != unsignedInteger(b, c) &&
-            (unsignedInteger(b, a) ? a : c) == UINT)
-            return 0;
+        if (integral(b, a) && integral(b, c) && unsignedInteger(b, a) != unsignedInteger(b, c)) {
+            // Mixed signedness is valid (§9.2) unless both operands are
+            // varint/varuint and the grown result would exceed the maximum width.
+            unsigned aw = integerWidth(b, a), cw = integerWidth(b, c);
+            unsigned uw = unsignedInteger(b, a) ? aw : cw, sw = unsignedInteger(b, a) ? cw : aw;
+            if (parameterizedIntegerWidth(representationKind(b, a)) && parameterizedIntegerWidth(representationKind(b, c)) &&
+                uw >= sw && uw >= OCEAN_MAX_INTEGER_BITS) return 0;
+        }
         return comparison || (op >= EXPR_ADD && op <= EXPR_DIVIDE) ||
                (!floating(b, a) && !floating(b, c) &&
                 (op == EXPR_MODULO || op == EXPR_XOR || op == EXPR_BITWISE_AND ||
@@ -4164,7 +4365,7 @@ static Value binary(Backend *b, enum binaryExprType op, Value a, Value c) {
     default:
         break;
     }
-    if (!instruction || representationKind(b, a.kind) >= BUFFER || a.kind == RAW_POINTER || a.kind == VOID || a.kind == BAD ||
+    if (!instruction || (representationKind(b, a.kind) >= BUFFER && !integral(b, a.kind)) || a.kind == RAW_POINTER || a.kind == VOID || a.kind == BAD ||
         (fp && !comparison && op != EXPR_ADD && op != EXPR_SUBTRACT && op != EXPR_MULTIPLY &&
          op != EXPR_DIVIDE)) {
         fail(b, "unsupported binary operator or operand type");
@@ -4285,6 +4486,14 @@ static Value expressionImpl(Backend *b, expr *e) {
         struct expr_literal *v = e->underlying;
         if (v->type == LITERAL_TYPE_NULL) return value(b, NULL_VALUE, "@__ocean.null");
         if (v->type == LITERAL_TYPE_INT) {
+            if (v->wideInteger) {
+                Kind kind = expressionKind(b, e);
+                Value magnitude = value(b, kind, "%s", v->wideInteger);
+                if (!v->negativeWide) return magnitude;
+                Value result = temp(b, kind);
+                fprintf(b->body, "  %s = sub %s 0, %s\n", result.operand, irType(b, kind), magnitude.operand);
+                return result;
+            }
             if (v->unsignedLiteral) return value(b, UINT, "%" PRIu64, *(uint64_t *)v->value);
             return value(b, INT, "%" PRId64, *(int64_t *)v->value);
         }
@@ -4564,6 +4773,7 @@ static Value expressionImpl(Backend *b, expr *e) {
                     return value(b, BAD, "0");
                 }
                 Value addr = address(b, &dot->parent);
+                if (addr.bitWidth) { fail(b, "cannot take the address of a bitfield for a pointer receiver"); return value(b, BAD, "0"); }
                 receiver = value(b, method->receiver, "%s", addr.operand);
             } else {
                 receiver = expression(b, &dot->parent);
@@ -4720,6 +4930,12 @@ static Value expressionImpl(Backend *b, expr *e) {
             free(parameterKinds);
             return value(b, BAD, "0");
         }
+        if (f->isExtern) {
+            if (wideInteger(b, resultKind)) fail(b, "C result integers wider than 64 bits are unsupported; use a pointer");
+            for (size_t i = 0; i < evaluated.count; i++)
+                if (wideInteger(b, evaluated.items[i].kind))
+                    fail(b, "integers wider than 64 bits require an explicit narrowing cast for C interoperability");
+        }
         int dynamicC = f->isExtern && f->isVariadic && v->spread;
         for (size_t i = fixed; f->isExtern && f->isVariadic && i < evaluated.count; i++)
             if (evaluated.items[i].kind == SCALAR_ANY) dynamicC = 1;
@@ -4850,9 +5066,12 @@ static Value expressionImpl(Backend *b, expr *e) {
             for (size_t i = fixed; i < evaluated.count; i++) {
                 args[i] = evaluated.items[i];
                 if (args[i].kind == NULL_VALUE) args[i].kind = RAW_POINTER;
-                if (representationKind(b, args[i].kind) == BOOL || representationKind(b, args[i].kind) == I8 || representationKind(b, args[i].kind) == I16 || representationKind(b, args[i].kind) == U8 || representationKind(b, args[i].kind) == U16)
-                    args[i] = convert(b, args[i], I32);
-                if (representationKind(b, args[i].kind) == F32) args[i] = convert(b, args[i], FLOAT);
+                // C default argument promotions: bool and integers narrower than 32
+                // bits become i32 (varint sign-extends, varuint zero-extends), other
+                // parameterized widths up to 64 bits become i32/u32/i64/u64, and f32
+                // becomes double. Wider integers were rejected above.
+                Kind promoted = promotedScalarKind(b, args[i].kind);
+                if (promoted != args[i].kind) args[i] = convert(b, args[i], promoted);
                 BufferKind *extra = bufferKind(b, args[i].kind);
                 if ((extra && extra->shape != 3 && extra->shape != 13 && extra->shape != 6) || args[i].kind == VOID)
                     fail(b, "C variadic arguments must be scalar values");
@@ -4979,6 +5198,12 @@ static Value expressionImpl(Backend *b, expr *e) {
                 Value replacement = slot(b, r.kind); store(b, replacement, r);
                 bind(b, ((struct expr_identifier *)v->left.underlying)->lexeme.lexeme, replacement);
             } else store(b, addr, r);
+            // Return the stored representation for bitfields and boxes.
+            if (addr.bitWidth || representationKind(b, addr.kind) == SCALAR_ANY)
+                return load(b, addr);
+            if (r.kind != addr.kind && (integral(b, r.kind) || floating(b, r.kind)) &&
+                (integral(b, addr.kind) || floating(b, addr.kind)))
+                return convert(b, r, addr.kind);
             return r;
         }
         Value a = expression(b, &v->left);
@@ -5020,6 +5245,7 @@ static Value expressionImpl(Backend *b, expr *e) {
         if (v->operation == UNARY_ADDRESS_OF) {
             Value storage = v->child.type == EXPR_TYPE_COMPOSITE
                                 ? materialize(b, &v->child) : address(b, &v->child);
+            if (storage.bitWidth) fail(b, "cannot take the address of a bitfield");
             if (v->child.type == EXPR_TYPE_COMPOSITE) escapeDynamicArrays(b, load(b, storage));
             return value(b, pointerKind(b, storage.kind), "%s", storage.operand);
         }
@@ -5041,10 +5267,10 @@ static Value expressionImpl(Backend *b, expr *e) {
                                         : value(b, old.kind, "1");
             Value r = binary(b, decrement ? EXPR_SUBTRACT : EXPR_ADD, old, one);
             store(b, addr, r);
-            return v->operation == UNARY_POSTFIX_INCREMENT ||
-                           v->operation == UNARY_POSTFIX_DECREMENT
-                       ? old
-                       : r;
+            if (v->operation == UNARY_POSTFIX_INCREMENT || v->operation == UNARY_POSTFIX_DECREMENT)
+                return old;
+            // A bitfield store truncates; the prefix result is the stored value.
+            return addr.bitWidth ? load(b, addr) : r;
         }
         Value a = expression(b, &v->child);
         if (a.kind == SCALAR_ANY) {
@@ -6438,7 +6664,7 @@ static void emitInterfaceDispatch(Backend *b, FILE *out) {
             unsigned n=++index;
             fprintf(out,"  %%test%u = icmp eq ptr %%tag, @__ocean.any.type.%u\n  br i1 %%test%u, label %%call%u, label %%next%u\ncall%u:\n",n,(unsigned)a->kind,n,n,n,n);
             BufferKind *t=bufferKind(b,a->kind);
-            int aggregate=t && (t->shape==4 || t->shape==5 || t->shape==17 || !t->shape || (t->definition && representationKind(b,a->kind)==SCALAR_ANY));
+            int aggregate=wideInteger(b,a->kind) || (t && (t->shape==4 || t->shape==5 || t->shape==17 || !t->shape || (t->definition && representationKind(b,a->kind)==SCALAR_ANY)));
             if (aggregate)
                 fprintf(out,"  %%value%u = call %s @__ocean.any.unbox.%u(i64 %%bits)\n",n,irType(b,a->kind),(unsigned)a->kind);
             else if (representationKind(b,a->kind)==F32)
@@ -6472,13 +6698,15 @@ static void emitInterfaceDispatch(Backend *b, FILE *out) {
 }
 // Generate per-concrete-type operations so dynamic any copies retain value semantics.
 static void emitAnyType(Backend *b, Kind kind) {
+    BufferKind scalarLayout = {.shape = 18};
     BufferKind *t = bufferKind(b, kind);
+    if (wideInteger(b, kind)) t = &scalarLayout;
     Value metadata = anyMetadata(b, kind);
-    int aggregate = t && (t->shape == 2 || t->shape == 4 || t->shape == 5 || t->shape == 17 || !t->shape || (t->definition && representationKind(b, kind) == SCALAR_ANY));
+    int aggregate = wideInteger(b, kind) || (t && (t->shape == 2 || t->shape == 4 || t->shape == 5 || t->shape == 17 || !t->shape || (t->definition && representationKind(b, kind) == SCALAR_ANY)));
     if (!aggregate) {
         b->ffiUsed = 1;
         fprintf(b->out, "%s = private constant { ptr, ptr, ptr } { ptr %s, ptr null, ptr null }\n",
-                metadata.operand, ffiType(b, representationKind(b, kind) == F32 ? FLOAT : representationKind(b, kind) == BOOL || representationKind(b, kind) == I8 || representationKind(b, kind) == I16 || representationKind(b, kind) == U8 || representationKind(b, kind) == U16 ? I32 : kind));
+                metadata.operand, ffiType(b, promotedScalarKind(b, kind)));
         return;
     }
     b->returnTransportUsed = 1;
@@ -6489,7 +6717,7 @@ static void emitAnyType(Backend *b, Kind kind) {
     b->scope = &scope;
     Value size = storageSize(b, kind);
     // Arrays have runtime extent, and aggregates owning arrays need deep storage.
-    int owns = ownsArrays(b, kind);
+    int owns = wideInteger(b, kind) || ownsArrays(b, kind);
     for (int operation = 0; operation < 3; operation++) {
         b->body = tmpfile(); b->slots = tmpfile();
         b->terminated = 0; b->copyTransport = operation == 2 ? 3 : 1;
@@ -7244,8 +7472,10 @@ static int emitLLVMMode(parseResult *program, FILE *output, llvmPackages *units)
         fprintf(output, "%s = type { ", t->ir);
         // A byte-size header must determine array length even for empty records.
         if (!t->count) fprintf(output, "i8");
-        for (size_t i = 0; i < t->count; i++)
-            fprintf(output, "%s%s", i ? ", " : "", irType(&b, t->members[i]));
+        for (size_t i = 0; i < t->count; i++) {
+            if (t->fieldIndices && i && t->fieldIndices[i] == t->fieldIndices[i - 1]) continue;
+            fprintf(output, "%s%s", i ? ", " : "", irType(&b, t->fieldStorage ? t->fieldStorage[i] : t->members[i]));
+        }
         fprintf(output, " }\n");
     }
     if (copy(anyRuntime, output)) fail(&b, "could not write any runtime");
@@ -7317,6 +7547,7 @@ cleanup:
         if (!b.buffers->definition) {
             free(b.buffers->arguments);
             free(b.buffers->members);
+            free(b.buffers->fieldIndices); free(b.buffers->fieldOffsets); free(b.buffers->fieldStorage);
         }
         if (b.buffers->shape == 17 && !b.buffers->definition) free(b.buffers->callable);
         free(b.buffers->layout);

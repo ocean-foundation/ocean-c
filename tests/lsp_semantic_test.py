@@ -53,6 +53,8 @@ func main() int {
         r=request('textDocument/rename',5,at(5,'number')+1,{'newName':'count'});edits=r['result']['changes'][source.as_uri()];assert len(edits)==2 and {e['range']['start']['line'] for e in edits}=={5,7},r
         r=request('textDocument/rename',1,at(1,'Name')+1,{'newName':'Label'});edits=r['result']['changes'][source.as_uri()];assert len(edits)==3,r
         r=request('textDocument/rename',5,at(5,'number')+1,{'newName':'person'});assert r.get('error'),r
+        for keyword in ('varint','varuint','match'):
+            r=request('textDocument/rename',5,at(5,'number')+1,{'newName':keyword});assert r.get('error'),(keyword,r)
         r=request('textDocument/rename',5,at(5,'number')+1,{'newName':'for'});assert r.get('error'),r
         r=request('textDocument/references',7,at(7,'helper')+1,{'context':{'includeDeclaration':True}});assert len(r['result'])==2,r
         # Completion uses the current unsaved expression and inferred receiver type.

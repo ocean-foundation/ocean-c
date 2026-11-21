@@ -261,9 +261,19 @@ static expr atomicImpl(parserState *state) {
             CHECK_SYNC;
             return (expr){.type = EXPR_TYPE_FUNCTION, .underlying = function.value};
         }
+        case VARINT:
+        case VARUINT:
         case UNDERSCORE:
         case ANY:
         case IDENTIFIER: {
+            if (tok.type == VARINT || tok.type == VARUINT) {
+                size_t start = state->tokenIndex;
+                if (!parseSignatureType(state, 0)) return (expr){0};
+                struct expr_zero *prefix = calloc(1, sizeof(*prefix));
+                CHECK_MALLOC(prefix);
+                prefix->type = copySignatureSpan(state, start, state->tokenIndex);
+                return (expr){.type = EXPR_TYPE_TYPE_NAME, .underlying = prefix, .location = tok};
+            }
             if (tok.type == IDENTIFIER && !strcmp(tok.lexeme, "map") && peek(state).type == LEFT_BRACKET) {
                 parserState trial = *state; trial.quietErrors = 1;
                 if (parseSignatureType(&trial, 0) && currentToken(&trial).type == LEFT_CURLY_BRACE) {
@@ -334,6 +344,8 @@ static expr atomicImpl(parserState *state) {
             struct expr_literal lit_int = {0};
             lit_int.type = LITERAL_TYPE_INT;
             lit_int.unsignedLiteral = tok.unsignedLiteral;
+            lit_int.wideInteger = tok.wideInteger; lit_int.integerBits = tok.integerBits;
+            lit_int.integerPowerOfTwo = tok.integerPowerOfTwo;
             lit_int.value = malloc(sizeof(int64_t));
             CHECK_MALLOC(lit_int.value);
             *(int64_t*) lit_int.value = tok.numValue.integer;
@@ -412,7 +424,8 @@ static expr primary(parserState *state) {
 
             case LEFT_CURLY_BRACE: {
                 if (parent.type != EXPR_TYPE_IDENTIFIER && parent.type != EXPR_TYPE_DOT &&
-                    parent.type != EXPR_TYPE_INDEX && parent.type != EXPR_TYPE_INSTANTIATION) goto endLoop;
+                    parent.type != EXPR_TYPE_INDEX && parent.type != EXPR_TYPE_INSTANTIATION &&
+                    parent.type != EXPR_TYPE_TYPE_NAME) goto endLoop;
                 // Legacy int[]{...} / T[N]{...}: array brackets now precede the element type.
                 if (parent.type == EXPR_TYPE_INDEX &&
                     !legacySuffix(state, tokenPosition(state, expressionRoot(parent)))) return (expr){0};
@@ -684,10 +697,20 @@ static expr secondaryImpl(parserState *state) {
             CHECK_SYNC;
             if (child2.type == EXPR_TYPE_LITERAL) {
                 struct expr_literal *literal = child2.underlying;
+                if (literal->type == LITERAL_TYPE_INT && literal->wideInteger) {
+                    literal->negativeWide = !literal->negativeWide;
+                    return child2;
+                }
                 if (literal->type == LITERAL_TYPE_INT && literal->unsignedLiteral &&
                     *(uint64_t *)literal->value == (uint64_t)INT64_MAX + 1) {
                     literal->unsignedLiteral = 0; *(int64_t *)literal->value = INT64_MIN;
                     return child2;
+                }
+                if (literal->type == LITERAL_TYPE_INT && literal->unsignedLiteral) {
+                    literal->wideInteger = malloc(24); CHECK_MALLOC(literal->wideInteger);
+                    snprintf(literal->wideInteger, 24, "u0x%" PRIx64, *(uint64_t *)literal->value);
+                    literal->integerBits = 64; literal->integerPowerOfTwo = 0;
+                    literal->negativeWide = 1; return child2;
                 }
             }
             struct expr_unary unary_n5 = {0};
@@ -1084,12 +1107,14 @@ typedef struct signatureFields {
     token *names;
     typeTokens *types;
     char variadic;
+    unsigned *bits;
 } signatureFields;
 
 static void freeSignatureFields(signatureFields *fields) {
     for (size_t i = 0; i < fields->count; i++) free(fields->types[i].tokens);
     free(fields->types);
     free(fields->names);
+    free(fields->bits);
     *fields = (signatureFields){0};
 }
 
@@ -1304,9 +1329,22 @@ static char parseStructFields(parserState *state, signatureFields *fields,
     } while (1);
     size_t start = state->tokenIndex;
     if (!parseSignatureType(state, depth)) return 0;
+    size_t end = state->tokenIndex;
+    unsigned bits = 0;
+    if (currentToken(state).type == COLON) {
+        advance(state);
+        token width = currentToken(state);
+        if (width.type != LITERAL_INT || width.numValue.integer < 1 || width.numValue.integer > 64)
+            return signatureError(state, "bitfield size must be an integer literal from 1 to 64");
+        bits = width.numValue.integer;
+        advance(state);
+    }
+    fields->bits = realloc(fields->bits, (fields->count + count) * sizeof(unsigned));
+    CHECK_MALLOC(fields->bits);
     for (size_t i = 0; i < count; i++) {
         token name = state->tokens[namesStart + 2 * i];
-        if (!addSignatureField(state, fields, name, start, state->tokenIndex)) return 0;
+        fields->bits[fields->count] = bits;
+        if (!addSignatureField(state, fields, name, start, end)) return 0;
     }
     return 1;
 }
@@ -1394,6 +1432,24 @@ static char parseSignatureTypeImpl(parserState *state, size_t depth) {
         if (state->tokenIndex < start + 3 || state->tokens[start].type != LEFT_BRACKET ||
             state->tokens[start + 1].type != RIGHT_BRACKET)
             return signatureError(state, "mixed requires an array type []T");
+        return 1;
+    }
+    if (tok.type == VARINT || tok.type == VARUINT) {
+        advance(state);
+        if (currentToken(state).type != LEFT_PAREN)
+            return signatureError(state, !strcmp(tok.lexeme, "varuint") ? "varuint requires a bit width: varuint(n)" : "varint requires a bit width: varint(n)");
+        advance(state);
+        if (currentToken(state).type != LITERAL_INT)
+            return signatureError(state, !strcmp(tok.lexeme, "varuint") ? "varuint width must be an integer literal from 1 to 8388608" : "varint width must be an integer literal from 1 to 8388608");
+        token width = currentToken(state);
+        if (width.wideInteger || width.numValue.integer < 1 || width.numValue.integer > OCEAN_MAX_INTEGER_BITS)
+            return signatureError(state, !strcmp(tok.lexeme, "varuint") ? "varuint width must be from 1 to 8388608" : "varint width must be from 1 to 8388608");
+        advance(state);
+        if (currentToken(state).type != RIGHT_PAREN)
+            return signatureError(state, !strcmp(tok.lexeme, "varuint") ? "Expected closing parenthesis after varuint width" : "Expected closing parenthesis after varint width");
+        // Array modifiers are prefixes ([n]varint(w)); a trailing '[' is legacy
+        // postfix syntax, reported by parseSignatureTypeInner.
+        advance(state);
         return 1;
     }
     if (tok.type == IDENTIFIER && !strcmp(tok.lexeme, "buffer")) {
@@ -1624,9 +1680,10 @@ static char parseCastTarget(parserState *state, typeTokens *target) {
     } else {
         // Single names, buffer<...>, and [..]T need no parentheses; a following '*'
         // is multiplication. Legacy Name[...] is still parsed so it can be reported.
-        if (tok.type != IDENTIFIER && tok.type != ANY && tok.type != LEFT_BRACKET)
+        if (tok.type != IDENTIFIER && tok.type != ANY && tok.type != LEFT_BRACKET &&
+            tok.type != VARINT && tok.type != VARUINT)
             return signatureError(state, "Expected cast type; multi-token types require parentheses");
-        if (tok.type == LEFT_BRACKET ||
+        if (tok.type == LEFT_BRACKET || tok.type == VARINT || tok.type == VARUINT ||
             (tok.type == IDENTIFIER && ((!strcmp(tok.lexeme, "buffer") && peek(state).type == LESS_THAN) ||
                                         peek(state).type == LEFT_BRACKET))) {
             char previous = state->castTarget;
@@ -2201,6 +2258,10 @@ static stmt parseStruct(parserState *state) {
     result->typeParamConstraints = typeParams.types;
     result->nVarParams = valueParams.count;
     result->nFields = valueParams.count + fields.count;
+    result->fieldBits = calloc(result->nFields + 1, sizeof(unsigned));
+    CHECK_MALLOC(result->fieldBits);
+    if (fields.count) memcpy(result->fieldBits + valueParams.count, fields.bits, fields.count * sizeof(unsigned));
+    free(fields.bits); fields.bits = NULL;
     if (valueParams.count) {
         result->fieldNames = malloc(sizeof(token) * result->nFields);
         result->fieldTypes = malloc(sizeof(typeTokens) * result->nFields);
@@ -2398,7 +2459,14 @@ static stmt parseEnum(parserState *state) {
             form = 2;
             tok = advance(state);
             while (tok.type != RIGHT_CURLY_BRACE) {
+                size_t before = fields.count;
                 if (!parseStructFields(state, &fields, NULL, 0)) goto invalid;
+                // Enum payloads have no packed layout; reject rather than drop the width.
+                for (size_t i = before; i < fields.count; i++)
+                    if (fields.bits && fields.bits[i]) {
+                        signatureError(state, "Bitfields are not supported in enum payloads");
+                        goto invalid;
+                    }
                 SET_TOK;
                 if (tok.type == RIGHT_CURLY_BRACE) break;
                 if (tok.type != COMMA && tok.type != SEMICOLON) {
@@ -2438,6 +2506,7 @@ static stmt parseEnum(parserState *state) {
         node.payloads[node.nMembers] = (struct stmt_struct){.name = name,
             .nFields = fields.count,
             .nVarParams = fields.count, .fieldNames = fields.names, .fieldTypes = fields.types};
+        free(fields.bits); fields.bits = NULL;
         token *names = realloc(node.names, (node.nMembers + 1) * sizeof(token));
         CHECK_MALLOC(names);
         node.names = names;

@@ -104,6 +104,7 @@ struct stmt_struct {
     size_t nFields; // Includes the immutable value-parameter prefix, in declaration order.
     typeTokens *fieldTypes;
     token *fieldNames;
+    unsigned *fieldBits; // Optional bitfield widths; zero denotes ordinary storage.
 };
 
 struct stmt_type {
@@ -325,6 +326,9 @@ enum literalType {
 struct expr_literal {
     enum literalType type;
     char unsignedLiteral;
+    char *wideInteger; // Borrowed token spelling; magnitude is never truncated.
+    unsigned integerBits;
+    int integerPowerOfTwo, negativeWide;
     char singlePrecision; // Literal typed as f32 by its context.
     size_t stringLength;
     const char *floatSpelling; // Original token text for rounding at the expected precision.

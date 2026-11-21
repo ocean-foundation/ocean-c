@@ -165,7 +165,8 @@ static int identifierName(const char *name) {
                               "interface", "continue",    "break",  "enum",   "if",   "defer",
                               "switch",    "fallthrough", "extern", "for",    "goto", "as",
                               "package",   "else",        "range",  "return", "case", "default",
-                              "null",      "panic",       "true",   "false"};
+                              "null",      "panic",       "true",   "false",  "match", "varint",
+                              "varuint"};
     for (size_t i = 0; i < sizeof(reserved) / sizeof(*reserved); i++)
         if (!strcmp(name, reserved[i]))
             return 0;
@@ -417,7 +418,7 @@ static void semanticWorker(FILE *out, const char *method, Json *params, Document
             }
             const char *builtins[] = {"uint", "u64", "u32", "u16", "u8", "int",    "i8",  "i16",  "i32",    "i64", "float",
                                       "f32",    "f64", "bool", "string", "any", "array", "Result",
-                                      "Optional", "buffer", "map", "delete", "len", "new", "make", "free", "recover",
+                                      "Optional", "varint", "varuint", "buffer", "map", "delete", "len", "new", "make", "free", "recover",
                                       "sizeof", "typeof", "zero"};
             for (i = 0; i < sizeof(builtins) / sizeof(*builtins); i++)
                 if (!strncmp(builtins[i], prefix, prefixLength))

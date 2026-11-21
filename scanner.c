@@ -1,3 +1,4 @@
+#include "wide_integer.h"
 #include "core.h"
 #include "dynarray.h"
 #include "token.h"
@@ -31,7 +32,7 @@ const enum tokenType keyword_types[] = {
     /*F32, STRING,*/ TYPE, STRUCT, FUNC, IMPORT,
     ANY, MIXED, INTERFACE, CONTINUE, BREAK, ENUM, IF, DEFER,
     SWITCH, FALLTHROUGH, EXTERN, FOR, GOTO, AS,
-    PACKAGE, ELSE, RANGE, RETURN, CASE, DEFAULT, NULL_KEYWORD, PANIC, MATCH, ASM,
+    PACKAGE, ELSE, RANGE, RETURN, CASE, DEFAULT, NULL_KEYWORD, PANIC, MATCH, VARINT, VARUINT, ASM,
 };
 
 const char *keywords[] = {
@@ -39,7 +40,7 @@ const char *keywords[] = {
     /*"f32", "string",*/ "type", "struct", "func", "import",
     "any", "mixed", "interface", "continue", "break", "enum", "if", "defer",
     "switch", "fallthrough", "extern", "for", "goto", "as",
-    "package", "else", "range", "return", "case", "default", "null", "panic", "match", "asm",
+    "package", "else", "range", "return", "case", "default", "null", "panic", "match", "varint", "varuint", "asm",
 };
 
 unsigned long hashes[NKEYWORDS] = {};
@@ -591,7 +592,6 @@ static void scan_literal_number(struct scannerState *state) {
         if (value != 0) value*=powl(10,negative?-(long double)exponent:(long double)exponent);
     }
     if(is_alphaNumeric(s[at]))goto invalid;
-    if(overflow && !floating)goto invalid;
     token result={.type=floating?LITERAL_FLOAT:LITERAL_INT,.line=state->thisLine,.column=state->thisColumn,.filename=state->filename};
     size_t n=at-start;result.lexeme=malloc(n+1);assert(result.lexeme);memcpy(result.lexeme,s+start,n);result.lexeme[n]=0;
     if(floating) {
@@ -603,11 +603,16 @@ static void scan_literal_number(struct scannerState *state) {
         if ((end && *end) || !isfinite(parsed)) { free(result.lexeme); goto invalid; }
         result.numValue.floating = parsed;
     }
-    else {result.unsignedLiteral=integer>INT64_MAX;result.numValue.unsignedInteger=integer;}
+    else if (overflow) {
+        result.wideInteger = wideIntegerLiteral(s + digits, at - digits, base,
+                                                &result.integerBits, &result.integerPowerOfTwo);
+        if (!result.wideInteger) { free(result.lexeme); goto invalid; }
+        result.unsignedLiteral = 1; result.numValue.integer = INT64_MIN;
+    } else {result.unsignedLiteral=integer>INT64_MAX;result.numValue.unsignedInteger=integer;}
     while(state->offset+1<at)next_char(state);
     push_tokenlist(state->list,result);return;
 invalid:
-    diagnostic(state->source,(token){.filename=state->filename,.line=state->thisLine,.column=state->thisColumn},"scanner","error","invalid numeric digit, exponent, or integer overflow (maximum UINT64_MAX)");scanning_error=1;
+    diagnostic(state->source,(token){.filename=state->filename,.line=state->thisLine,.column=state->thisColumn},"scanner","error","invalid numeric digit, exponent, or integer literal exceeding 8388608 bits");scanning_error=1;
 }
 
 static uint32_t scan_literal_char(struct scannerState *state) {

@@ -57,7 +57,10 @@ int main(void) {
     analyze("func take(x int) {} func main() { take(-9223372036854775809); }", 0);
     analyze("func take(x i8) {} func main() { take(1 + 2); }", 0);
     analyze("func main() { a: u8 = 255; b: i16 = -1; result: int = a + b; }", 1);
-    analyze("func main() { a: uint = 1; b: int = -1; result := a + b; }", 0);
+    // Mixed signedness with a fixed-width operand keeps the wider width, signed: uint + int is int.
+    analyze("func main() { a: uint = 1; b: int = -1; result: int = a + b; }", 1);
+    analyze("func main() { a: u8 = 1; b: u16 = 2; a += b; }", 0);
+    analyze("func main() { a: i32 = 1; b: i16 = 2; a += b; c: i32 = a + b; }", 1);
     analyze("struct Stack<T> { underlying []T; top int; } func newStack<T>() Stack<T> { s: Stack<T> = {0->any, 0}; return s; } func main() {}", 0);
     analyze("struct Stack<T> { underlying []T; top int; } func newStack<T>() Stack<T> { s: Stack<T> = {0->any, 0}; return s; } func main() { s := newStack<int>(); }", 0);
     analyze("func main() { xs: []int = 0->any; }", 0);

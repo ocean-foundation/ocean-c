@@ -31,7 +31,7 @@
  (#match? @variable.other.member "^[a-z_]"))
 
 ((identifier) @type.builtin
- (#match? @type.builtin "^(int|uint|float|bool|string|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|array|buffer|map|void)$"))
+ (#match? @type.builtin "^(int|uint|float|bool|string|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|varint|varuint|array|buffer|map|void)$"))
 (keyword ["any" "mixed"]) @type.builtin
 (keyword ["if" "else" "switch" "match" "case" "default" "for" "range" "break" "continue" "fallthrough" "return" "defer" "goto" "panic"]) @keyword.control
 (keyword "import") @keyword.control.import

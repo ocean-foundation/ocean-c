@@ -11,7 +11,7 @@ enum tokenType {
     F32, STRING,*/ TYPE, STRUCT, FUNC, IMPORT,
     ANY, MIXED, INTERFACE, CONTINUE, BREAK, ENUM, IF, DEFER,
     SWITCH, FALLTHROUGH, EXTERN, FOR, GOTO, AS,
-    PACKAGE, ELSE, RANGE, RETURN, CASE, DEFAULT, NULL_KEYWORD, PANIC, MATCH, ASM, ASM_BODY,
+    PACKAGE, ELSE, RANGE, RETURN, CASE, DEFAULT, NULL_KEYWORD, PANIC, MATCH, VARINT, VARUINT, ASM, ASM_BODY,
 
     // symbols
     LEFT_CURLY_BRACE, RIGHT_CURLY_BRACE, LEFT_PAREN, RIGHT_PAREN,
@@ -45,8 +45,14 @@ enum tokenType {
     EOF_TOKEN,
 };
 
+// LLVM IntegerType::MAX_INT_BITS, inclusive.
+#define OCEAN_MAX_INTEGER_BITS 8388608
+
 typedef struct {
     char *lexeme;
+    char *wideInteger; // Exact LLVM hexadecimal magnitude for literals above UINT64_MAX.
+    unsigned integerBits;
+    int integerPowerOfTwo;
     char unsignedLiteral; // Integer magnitude exceeds INT64_MAX, but fits uint64_t.
     size_t stringLength; // Decoded bytes, excluding the scanner storage terminator.
     union {

@@ -111,6 +111,8 @@ char *getTokenTypeStr(enum tokenType t) {
         case PLUS:
             return "PLUS";
         case MATCH: return "MATCH";
+        case VARINT: return "VARINT";
+        case VARUINT: return "VARUINT";
         case ASM: return "ASM";
         case ASM_BODY: return "ASM_BODY";
         case FAT_ARROW: return "FAT_ARROW";
@@ -199,6 +201,7 @@ void printToken(token tok) {
             printf("(LITERAL_STRING %s) ", tok.lexeme);
             break;
         case LITERAL_INT:
+            if (tok.wideInteger) { printf("(LITERAL_INT %s) ", tok.lexeme); break; }
             printf("(LITERAL_INT \"%s\" %" PRId64 ") ", tok.lexeme, tok.numValue.integer);
             break;
         case LITERAL_FLOAT:

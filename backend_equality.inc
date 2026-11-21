@@ -134,8 +134,8 @@ static void prepareEqualityHelpers(Backend *b) {
 static Value equalityBits(Backend *b, Kind kind, const char *bits) {
     BufferKind *layout = bufferKind(b, kind);
     Value result;
-    if (layout && (layout->shape == 4 || layout->shape == 5 || layout->shape == 17 || !layout->shape ||
-                   (layout->definition && representationKind(b, kind) == SCALAR_ANY))) {
+    if (wideInteger(b, kind) || (layout && (layout->shape == 4 || layout->shape == 5 || layout->shape == 17 || !layout->shape ||
+                   (layout->definition && representationKind(b, kind) == SCALAR_ANY)))) {
         result = temp(b, kind);
         fprintf(b->body, "  %s = call %s @__ocean.any.unbox.%u(i64 %s)\n", result.operand, irType(b, kind), (unsigned)kind, bits);
     } else {
@@ -145,6 +145,36 @@ static Value equalityBits(Backend *b, Kind kind, const char *bits) {
     }
     return result;
 }
+static Value exactIntegerFloatEquality(Backend *b, Value integer, Value number) {
+    int isUnsigned = unsignedInteger(b, integer.kind);
+    // All finite f32/f64 magnitudes fit in 128/1024 unsigned bits.
+    unsigned floatWidth = (number.kind == F32 ? 128 : 1024) + !isUnsigned;
+    Kind floatInteger = canonicalIntegerKind(floatWidth, isUnsigned);
+    const char *numberType = irType(b, number.kind);
+    Value lower = temp(b, BOOL), upper = temp(b, BOOL), inRange = temp(b, BOOL);
+    fprintf(b->body, "  %s = fcmp %s %s %s, %s\n", lower.operand,
+            isUnsigned ? "oge" : "ogt", numberType, number.operand,
+            isUnsigned ? "0.0" : "0xFFF0000000000000");
+    fprintf(b->body, "  %s = fcmp olt %s %s, 0x7FF0000000000000\n",
+            upper.operand, numberType, number.operand);
+    fprintf(b->body, "  %s = and i1 %s, %s\n", inRange.operand, lower.operand, upper.operand);
+    // Feed a safe value to the float-to-integer conversion for invalid inputs.
+    Value safe = temp(b, number.kind);
+    fprintf(b->body, "  %s = select i1 %s, %s %s, %s 0.0\n",
+            safe.operand, inRange.operand, numberType, number.operand, numberType);
+    Value truncated = convert(b, safe, floatInteger);
+    Value roundTrip = convert(b, truncated, number.kind), whole = temp(b, BOOL);
+    fprintf(b->body, "  %s = fcmp oeq %s %s, %s\n",
+            whole.operand, numberType, number.operand, roundTrip.operand);
+    Kind comparison = exactComparisonKind(b, integer.kind, floatInteger);
+    Value same = binary(b, EXPR_EQUALITY, convert(b, integer, comparison),
+                        convert(b, truncated, comparison));
+    Value matches = temp(b, BOOL), result = temp(b, BOOL);
+    fprintf(b->body, "  %s = and i1 %s, %s\n", matches.operand, whole.operand, same.operand);
+    fprintf(b->body, "  %s = and i1 %s, %s\n", result.operand, inRange.operand, matches.operand);
+    return result;
+}
+
 static void emitBoxedEquality(Backend *b) {
     if (!b->boxedEqualityUsed) return;
     Scope scope = {.parent = b->globalScope}; b->scope = &scope;
@@ -181,7 +211,20 @@ static void emitBoxedEquality(Backend *b) {
             unsigned selected = ++b->label, next = ++b->label;
             branch(b, match, selected, next); label(b, selected);
             Value a = equalityBits(b, left->kind, "%left.bits"), c = equalityBits(b, right->kind, "%right.bits");
-            Value result = binary(b, EXPR_EQUALITY, a, c);
+            // Boxed numbers compare exact values, not the arithmetic result type
+            // (which reinterprets i64 + u64 as i64): equality stays transitive and
+            // agrees with emitMapHash, which normalizes values. i8(-1) != u8(255).
+            int aInteger = integral(b, a.kind), cInteger = integral(b, c.kind);
+            Value result;
+            if (aInteger != cInteger) {
+                result = aInteger ? exactIntegerFloatEquality(b, a, c)
+                                  : exactIntegerFloatEquality(b, c, a);
+            } else if (aInteger) {
+                Kind exact = exactComparisonKind(b, left->kind, right->kind);
+                result = binary(b, EXPR_EQUALITY, convert(b, a, exact), convert(b, c, exact));
+            } else {
+                result = binary(b, EXPR_EQUALITY, a, c);
+            }
             fprintf(b->body, "  ret i1 %s\n", result.operand); b->terminated = 1; label(b, next);
         }
     }
