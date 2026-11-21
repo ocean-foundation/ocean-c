@@ -173,3 +173,23 @@ func main() int {
     if (d.(varint(129)) != 1 || e.(varint(129)) != 1) return 2;
     return 0; }''')
     rejected('func main() { w8: varuint(8) = 5; u: u16 = 6; x: varuint(8) = w8 + u; }', 'type mismatch')
+
+    program('''func main() int {
+    x: any; y: varint(8) = 7; z := (x = y);
+    wide: varuint(128) = 0x10000000000000001; w := (x = wide);
+    if (z.(varint(8)) != 7 || w.(varuint(128)) != wide || x.(varuint(128)) != wide) return 1;
+    return 0; }''')
+
+    program(f'''func main() int {{
+    exact: any = 16777216->varuint(25); rounded: any = 16777217->varuint(25);
+    f: any = 16777216->f32; fractional: any = 0.5;
+    huge: any = {1 << 1023}; sameHuge: any = {(1 << 1023)}->f64;
+    bigger: any = {(1 << 1023) + 1}; negative: any = -1->int; negativeFloat: any = -1.0;
+    zero: any = 0->uint; negativeZero: any = -0.0;
+    infinity: any = {1 << 1024}->f64; nan: any = 0.0 / 0.0;
+    if (exact != f || f != exact || rounded == f || f == rounded) return 1;
+    if (huge != sameHuge || bigger == sameHuge || negative != negativeFloat) return 2;
+    if (zero == fractional || zero != negativeZero || zero == nan || huge == infinity) return 3;
+    values := map[any]int{{exact: 1, rounded: 2}};
+    if (values[f] != 1 || len(values) != 2) return 4;
+    return 0; }}''')

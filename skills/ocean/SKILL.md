@@ -786,8 +786,9 @@ items["three"] = true;
 ```
 
 Keys use Ocean equality: strings and aggregates compare contents, pointers
-compare addresses, and boxed primitive numbers use existing numeric equality.
-For example, keys `1` and `1.0` refer to the same entry in `map[any]V`.
+compare addresses, and boxed primitive numbers compare by exact value.
+Keys `1` and `1.0` refer to the same entry in `map[any]V`. A boxed integer
+and float compare equal only when the float represents that exact integer.
 Positive and negative floating zero are equal; NaN keys are unequal to themselves.
 Copies of maps own independent keys and values recursively. Maps compare equal
 when they have the same entries, regardless of insertion order or capacity.
@@ -878,6 +879,7 @@ ordinary fields, initialized once in literals such as `Matrix{2, 3}`.
 
 A defined type needs explicit casts to/from its underlying type; aliases do not.
 Boxing a defined type in `any` preserves its concrete type identity.
+If `x` is `any`, `z := (x = y)` gives `z` the boxed value stored in `x`.
 Generic constraints include interfaces, unions, `~T` underlying types, and struct
 families (`Box` versus `Box<int>`). Boxed `any` values support type assertions
 and type switches. `value.(T)` traps on a mismatch; the two-binding form

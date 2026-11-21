@@ -5198,10 +5198,9 @@ static Value expressionImpl(Backend *b, expr *e) {
                 Value replacement = slot(b, r.kind); store(b, replacement, r);
                 bind(b, ((struct expr_identifier *)v->left.underlying)->lexeme.lexeme, replacement);
             } else store(b, addr, r);
-            // The assignment's value is the stored value, in the destination's type:
-            // a bitfield store truncates, and a narrower scalar is widened, so
-            // z := (x = y) gives z x's type (as the checker does), not y's.
-            if (addr.bitWidth) return load(b, addr);
+            // Return the stored representation for bitfields and boxes.
+            if (addr.bitWidth || representationKind(b, addr.kind) == SCALAR_ANY)
+                return load(b, addr);
             if (r.kind != addr.kind && (integral(b, r.kind) || floating(b, r.kind)) &&
                 (integral(b, addr.kind) || floating(b, addr.kind)))
                 return convert(b, r, addr.kind);
