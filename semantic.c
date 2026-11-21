@@ -1927,45 +1927,87 @@ static int equalityCompatible(Type *a, Type *b) {
     return compatibleTypes(a, b) || compatibleTypes(b, a);
 }
 
+// The static type of an operation on a type list whose member results differ:
+// a type list of those distinct results (varuint(4)|varint(8) plus varuint(16)
+// is uint|int), so every runtime case is one of its terms. A result that cannot
+// be spelled as a term makes the whole result any, which is still sound because
+// the value is boxed.
+static Type *resultUnion(Context *c, Type **parts, size_t count) {
+    Type *distinct[64];
+    size_t n = 0;
+    for (size_t i = 0; i < count; i++) {
+        int seen = 0;
+        for (size_t j = 0; j < n && !seen; j++) seen = identicalTypes(distinct[j], parts[i]);
+        if (!seen) {
+            if (n == sizeof(distinct) / sizeof(*distinct)) return &any;
+            distinct[n++] = parts[i];
+        }
+    }
+    if (n == 1) return distinct[0];
+    typeTokens span = {0};
+    for (size_t i = 0; i < n; i++) {
+        Type *part = distinct[i];
+        typeTokens term = typeSetSpan(part);
+        int owned = 0;
+        if (!term.nTokens) {
+            if (definedType(part)) return &any;
+            if (representation(part)->immutableString) {
+                term.nTokens = 1; term.tokens = calloc(1, sizeof(token)); owned = 1;
+                if (!term.tokens) exit(1);
+                term.tokens[0].type = IDENTIFIER; term.tokens[0].lexeme = "string";
+            } else if (canonical(part) == &integer || canonical(part) == &signedByte ||
+                       canonical(part) == &floating || canonical(part) == &boolean) {
+                term = numericTypeSpan(part, (token){0}); owned = 1;
+            } else return &any;
+        }
+        size_t grown = span.nTokens + term.nTokens + (span.nTokens ? 1 : 0);
+        token *tokens = allocate(c, grown * sizeof(token));
+        if (span.nTokens) memcpy(tokens, span.tokens, span.nTokens * sizeof(token));
+        size_t at = span.nTokens;
+        if (span.nTokens) { tokens[at] = (token){0}; tokens[at].type = BITWISE_OR; tokens[at].lexeme = "|"; at++; }
+        memcpy(tokens + at, term.tokens, term.nTokens * sizeof(token));
+        if (owned) free(term.tokens);
+        span.tokens = tokens; span.nTokens = grown;
+    }
+    return typeOf(c, span);
+}
 static Type *operatorResult(Context *c, enum binaryExprType op, Type *a, Type *b, unsigned depth) {
     if (depth > 32) return NULL;
     if (op == EXPR_EQUALITY || op == EXPR_NOT_EQUALS) return &boolean;
     typeTokens list = typeSetSpan(a);
     if (list.nTokens) {
-        Type *result = NULL;
+        Type *parts[64];
+        size_t count = 0;
         for (size_t start = 0; start < list.nTokens;) {
             size_t end = constraintTermEnd(list, start);
             Type *term = typeOf(c, constraintTerm(list, start, end));
             Type *part =
                 operatorResult(c, op, term, a == b && a->abstractParameter ? term : b, depth + 1);
             if (!part) return NULL;
-            if (!result)
-                result = part;
-            else if (!identicalTypes(result, part))
-                result = a;
+            if (count < sizeof(parts) / sizeof(*parts)) parts[count++] = part;
+            else return &any;
             start = end + 1;
         }
         // Arithmetic on one abstract T preserves its concrete specialization.
         return a == b && op != EXPR_LOGICAL_AND && op != EXPR_LOGICAL_OR &&
                        !(op >= EXPR_EQUALITY && op <= EXPR_GREATER_EQUALS)
                    ? a
-                   : result;
+                   : resultUnion(c, parts, count);
     }
     list = typeSetSpan(b);
     if (list.nTokens) {
-        Type *result = NULL;
+        Type *parts[64];
+        size_t count = 0;
         for (size_t start = 0; start < list.nTokens;) {
             size_t end = constraintTermEnd(list, start);
             Type *part =
                 operatorResult(c, op, a, typeOf(c, constraintTerm(list, start, end)), depth + 1);
             if (!part) return NULL;
-            if (!result)
-                result = part;
-            else if (!identicalTypes(result, part))
-                result = b;
+            if (count < sizeof(parts) / sizeof(*parts)) parts[count++] = part;
+            else return &any;
             start = end + 1;
         }
-        return result;
+        return resultUnion(c, parts, count);
     }
     if (a == &unknown || b == &unknown) return &unknown;
     if (canonical(a) == &any || canonical(b) == &any || a->interface || b->interface) return NULL;

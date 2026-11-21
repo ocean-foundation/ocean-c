@@ -96,5 +96,15 @@ func main() int {
     if (add(3->varuint(4), 4->varuint(16)) != 7 || add(200->varuint(8), 1->varuint(16)) != 201) return 1;
     if (small(2->u8, 5->u32) != 10) return 2;
     return 0; }''')
+    # When member results differ, the result is the list of those results (uint|int),
+    # not the operand's list, so every runtime value is one of its terms.
     check('func mix(a varuint(4) | varint(8), b varuint(16)) { z: string = a + b; } func main() {}',
-          'got varuint(4)|varint(8)')
+          'got uint|int')
+    check('func mix(a varuint(4) | varint(8), b varuint(16)) varuint(4) | varint(8) { return a + b; } func main() {}',
+          'expected varuint(4)|varint(8), got uint|int')
+    program('''func mix(a varuint(4) | varint(8), b varuint(16)) uint | int { return a + b; }
+func kind(r uint | int) int { switch (r.(type)) { case uint: return 1; case int: return 2; } return 0; }
+func main() int {
+    if (kind(mix(15->varuint(4), 65535->varuint(16))) != 1 || mix(15->varuint(4), 65535->varuint(16)).(uint) != 65550) return 1;
+    if (kind(mix((-3)->varint(8), 5->varuint(16))) != 2 || mix((-3)->varint(8), 5->varuint(16)).(int) != 2) return 2;
+    return 0; }''')
