@@ -80,3 +80,21 @@ func main() int {
         ('func varuint() {} func main() {}', 'Expected function name'),
     ):
         check(body, message)
+    # C variadic arguments use the default promotions: odd widths sign-extend
+    # (varint) or zero-extend (varuint) to int/long long rather than passing iN.
+    program('''extern i32 snprintf(buffer<i8> out, int size, buffer<i8> format, ...);
+func main() int {
+    out := [100]i8; a: varint(6) = -1; b: varint(40) = -5; c: varuint(40) = 1099511627775; d: varint(17) = -65536;
+    n := extern.snprintf(out.data, len(out), "%d %lld %llu %d %d\\0".data, a, b, c, d, true);
+    s := ""; for (i := 0; i < n; i++) s += out[i];
+    if (s != "-1 -5 1099511627775 -65536 1") return 1;
+    return 0; }''')
+    # C has no integers other than 8, 16, 32, and 64 bits wide, so externs cannot declare them.
+    for body in (
+        'extern i32 abs(varint(6) x); func main() {}',
+        'extern varuint(12) f(); func main() {}',
+        'type nibble varint(4); extern void g(nibble x); func main() {}',
+        'type small = varuint(3); extern void g(small x); func main() {}',
+    ):
+        check(body, 'C has no')
+    check('extern i32 abs(varint(32) x); extern varuint(64) h(varint(8) a, varuint(16) b); func main() {}')

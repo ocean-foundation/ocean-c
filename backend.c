@@ -5031,9 +5031,12 @@ static Value expressionImpl(Backend *b, expr *e) {
             for (size_t i = fixed; i < evaluated.count; i++) {
                 args[i] = evaluated.items[i];
                 if (args[i].kind == NULL_VALUE) args[i].kind = RAW_POINTER;
-                if (representationKind(b, args[i].kind) == BOOL || representationKind(b, args[i].kind) == I8 || representationKind(b, args[i].kind) == I16 || representationKind(b, args[i].kind) == U8 || representationKind(b, args[i].kind) == U16)
-                    args[i] = convert(b, args[i], I32);
-                if (representationKind(b, args[i].kind) == F32) args[i] = convert(b, args[i], FLOAT);
+                // C default argument promotions: bool and integers narrower than 32
+                // bits become i32 (varint sign-extends, varuint zero-extends), other
+                // parameterized widths up to 64 bits become i32/u32/i64/u64, and f32
+                // becomes double. Wider integers were rejected above.
+                Kind promoted = promotedScalarKind(b, args[i].kind);
+                if (promoted != args[i].kind) args[i] = convert(b, args[i], promoted);
                 BufferKind *extra = bufferKind(b, args[i].kind);
                 if ((extra && extra->shape != 3 && extra->shape != 13 && extra->shape != 6) || args[i].kind == VOID)
                     fail(b, "C variadic arguments must be scalar values");

@@ -46,6 +46,8 @@ type and value through copies, containers, and reflection. Very large widths
 can require substantial compilation time and memory; native lowering also
 depends on the installed LLVM target. C scalar interoperability is limited to
 64 bits: explicitly narrow a fitting value or pass a pointer to wide storage.
+Extern parameters and results may only use widths C has (8, 16, 32, or 64
+bits); C variadic arguments sign- or zero-extend to `int` or `long long`.
 Boxed wide integers cannot be passed directly to C variadic formatting.
 Standard-library `io.ParseInt` still returns a 64-bit `int`.
 Bitfield sizes remain 1–64 bits, even when their backing integer is wider.

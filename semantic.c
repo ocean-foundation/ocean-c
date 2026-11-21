@@ -257,6 +257,21 @@ static int integerShape(Type *t, int *isUnsigned) {
     if (!strcmp(name, "i32") || !strcmp(name, "u32")) return 32;
     return 64;
 }
+// C has no integer type narrower than 64 bits other than 8, 16, and 32, so an
+// extern signature cannot use varint(n)/varuint(n) at another width (including
+// through a defined type or alias). Wider values are rejected at calls.
+static void checkExternIntegerWidth(Context *c, Type *t, token at, const char *what) {
+    while (t->underlying) t = t->underlying;
+    int isUnsigned = 0, width = t->varintBits ? integerShape(t, &isUnsigned) : 0;
+    if (!width || width > 64 || width == 8 || width == 16 || width == 32 || width == 64) return;
+    char message[192];
+    snprintf(message, sizeof(message),
+             "C has no %d-bit integer type: an extern %s must be 8, 16, 32, or 64 bits wide; "
+             "declare a C-sized integer and cast with ->", width, what);
+    at = diagnosticLocation(c, at);
+    diagnostic(programSource(c->program, at.filename), at, "semantic", "error", "%s", message);
+    c->errors++;
+}
 static Type *sizedInteger(Context *c, unsigned width, int isUnsigned) {
     if (width == 64) return isUnsigned ? &unsignedIntegerType : &integer;
     Type *result = allocate(c, sizeof(*result));
@@ -1403,6 +1418,14 @@ static void function(Context *c, struct stmt_func *f) {
     }
     for (size_t i = 0; i < f->nParams; i++)
         checkBufferDimension(c, typeOf(c, f->paramTypeNames[i]), f->name);
+    if (f->isExtern) {
+        for (size_t i = 0; i < f->nParams; i++)
+            checkExternIntegerWidth(c, typeOf(c, f->paramTypeNames[i]),
+                                    f->paramTypeNames[i].nTokens ? f->paramTypeNames[i].tokens[0] : f->name, "parameter");
+        for (size_t i = 0; i < f->nResults; i++)
+            checkExternIntegerWidth(c, typeOf(c, f->resultTypes[i]),
+                                    f->resultTypes[i].nTokens ? f->resultTypes[i].tokens[0] : f->name, "result");
+    }
     for (size_t i = 0; i < f->nResults; i++)
         declare(c, f->resultNames[i], typeOf(c, f->resultTypes[i]), 0);
     if (f->receiverName.type == IDENTIFIER)
