@@ -1,10 +1,10 @@
 package main;
 
-extern int write(i32 fd, buffer<i8>[] data, int count);
+extern int write(i32 fd, buffer<i8> data, int count);
 
 func main() int {
     greeting: string = "Hello" + ", Ocean!";
-    bytes: i8[] = greeting;
+    bytes: []i8 = greeting;
     bytes[0] = 104;
     greeting += "\n";
     extern.write(1, greeting.data, len(greeting));

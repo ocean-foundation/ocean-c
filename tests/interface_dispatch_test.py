@@ -47,14 +47,14 @@ func main() int {
     if (embedded.Get()!=11) return 8;
     a: Value = Box{n:12}; b: Value = Other{n:9};
     if (a.Get()!=12 || read(b)!=18 || makeValue().Get()!=14) return 1;
-    xs := mixed Value[]{Box{n:2}, Other{n:3}};
+    xs := mixed []Value{Box{n:2}, Other{n:3}};
     if (xs[0].Get()!=2 || xs[1].Get()!=6) return 2;
     concrete := Box{n:5}; p: Change = &concrete;
     p.Add(2); deferred(p);
     if (p.Get()!=10 || concrete.n!=10) return 3;
     g: Generic = Box{n:4};
     if (g.Scale<int>(3)!=12.0 || g.Scale<float>(2.5)!=10.0) return 4;
-    many: Many = Box{n:1}; values := int[]{2,3};
+    many: Many = Box{n:1}; values := []int{2,3};
     if (many.Sum(2,3)!=6 || many.Sum(values...)!=6 || many.Sum()!=1) return 5;
     if (text(Words{text:"Ocean"})!="Ocean") return 6;
     entries := map[string]Value{"a":Box{n:8}};

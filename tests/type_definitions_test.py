@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix='ocean defined types ') as directory:
     program('''type cStr buffer<i8>; type Alias = cStr;
 func use(s cStr) int { return s[0]->int; }
 func main() int {
-    bytes := buffer<i8>[2]{65, 0}; raw: buffer<i8> = bytes;
+    bytes := buffer<i8, 2>{65, 0}; raw: buffer<i8> = bytes;
     named := raw->cStr; alias: Alias = named; back := alias->buffer<i8>;
     if (back[0] != 65) return 1;
     return use(alias);
@@ -58,13 +58,13 @@ func main() int { x := (-7)->Small; ++x; y := 1.5->Single; y++;
     return (-x)->int + (z->int); }''', 8)
 
     program('''struct Record { value int; text string; }
-type Named Record; type Numbers int[]; type Fixed buffer<int>[2];
+type Named Record; type Numbers []int; type Fixed buffer<int, 2>;
 func main() int {
     n := Named{value: 3, text: "x"}; raw := n->Record; raw.value = 9;
     if (n.value != 3) return 1;
     arr := Numbers{1, 2}; copy := arr; arr += 3;
-    plain := arr->(int[]); plain[0] = 9;
-    fixed := Fixed{4, 5}; b := fixed->(buffer<int>[2]);
+    plain := arr->([]int); plain[0] = 9;
+    fixed := Fixed{4, 5}; b := fixed->(buffer<int, 2>);
     return len(copy) + len(arr) + arr[0] + b[1] + n.value;
 }''', 14)
 
@@ -74,7 +74,7 @@ type Alias = Future; type Future int;''', 4)
 
     program('''type Bytes = buffer<i8>; type Count = int;
 func read(b Bytes, n Count) int { return b[0]->int + n; }
-func main() int { raw := buffer<i8>[1]{7}; view: buffer<i8> = raw;
+func main() int { raw := buffer<i8, 1>{7}; view: buffer<i8> = raw;
     alias: Bytes = view; back: buffer<i8> = alias;
     return read(back, 3); }''', 10)
 
@@ -111,9 +111,9 @@ func classify(x any) int { switch (v := x.(type)) {
 case Data: raw := v->any; return raw.(int); default: return 99; } }
 func main() int { x := 7->Data; y: any = x; return classify(y); }''', 7)
 
-    program('''struct Box<T> { value T; } type Alias = Box; type Ints = int[];
+    program('''struct Box<T> { value T; } type Alias = Box; type Ints = []int;
 func main() int { a := Alias<int>{3}; b: Box<int> = a; nums := Ints{1, 2};
-    raw: int[] = nums; return b.value + raw[1]; }''', 5)
+    raw: []int = nums; return b.value + raw[1]; }''', 5)
 
     program('''func f<T any>(x T) T { type Local T; n := x->Local; return n->T; }
 func main() int { if (!f<bool>(true)) return 1; return f<int>(9); }''', 9)
@@ -124,7 +124,7 @@ func (c *Count) Add(n Count) { *c += n; }
 func (c Alias) Double() Count { return c + c; }
 interface Getter { Get() int; }
 func main() int { x := 3->Count; x.Add(2->Alias); p := &x;
-    xs := mixed Getter[]{x, p};
+    xs := mixed []Getter{x, p};
     return x.Double().Get() + p.Get() + len(xs); }''', 17)
 
     program('''type P *int;
@@ -141,16 +141,16 @@ func main() int { a := Alias{3}; b: Base = a; d := b->Distinct;
     return a.Get() + d.Own(); }''', 7)
 
     program('''type Int int; type Float float; type Tiny i8;
-extern i32 snprintf(buffer<i8>[] out, int size, buffer<i8>[] format, ...);
-func format(xs ...any) string { output := i8[40];
+extern i32 snprintf(buffer<i8> out, int size, buffer<i8> format, ...);
+func format(xs ...any) string { output := [40]i8;
     size := extern.snprintf(output.data, len(output), "%d %.1f\\0".data, xs...);
     s := ""; for (i := 0; i < size; i++) s += output[i]; return s; }
 func main() int { s := format((-7)->Tiny, 1.5->Float);
     if (s != "-7 1.5") return 1; return 0; }''')
 
     for body in (
-        'type Count int; func main() { xs: int[] = Count[]{1->Count}; }',
-        'type Count int; func main() { xs: Count[] = int[]{1}; }',
+        'type Count int; func main() { xs: []int = []Count{1->Count}; }',
+        'type Count int; func main() { xs: []Count = []int{1}; }',
         'type Count int; struct Box<T> { v T; } func main() { x: Box<int> = Box<Count>{1->Count}; }',
         'type Data any; func main() { x: any = 1; y: Data = x; }',
     ):
@@ -167,7 +167,7 @@ func main() int { tail := Named{value: 3, next: null};
     return holder.item.value + holder.item.next.value; }''', 7)
     rejected('type Count int; func main() { x: Count<int>; }', 'type arguments')
 
-    program('''type Values mixed any[];
+    program('''type Values mixed []any;
 func classify(x any) int { switch (v := x.(type)) {
 case Values: return len(v); default: return 99; } }
 func main() int { a := Values{1, "x"}; b: any = a;
@@ -181,8 +181,8 @@ func main() int { a := Values{1, "x"}; b: any = a;
         assert result.returncode != 0, (body, result)
 
     traps('type Count int; func main() { boxed: any = 3->Count; x := boxed.(int); }')
-    traps('type Values mixed any[]; func main() { boxed: any = mixed any[]{1, "x"}; x := boxed.(Values); }')
-    traps('type Values mixed any[]; func main() { boxed: any = Values{1, "x"}; x := boxed.(int[]); }')
+    traps('type Values mixed []any; func main() { boxed: any = mixed []any{1, "x"}; x := boxed.(Values); }')
+    traps('type Values mixed []any; func main() { boxed: any = Values{1, "x"}; x := boxed.([]int); }')
 
     # Public definitions retain identity across package boundaries; aliases erase it.
     (root / 'ocean.mod').write_text('module example.com/types\nocean 0.1\n')

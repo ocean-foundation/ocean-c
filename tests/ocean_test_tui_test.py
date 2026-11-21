@@ -174,7 +174,7 @@ func TestSkip(t *testing.T) { t.Skip("not available"); }
     # A busy event stream must not block the compiler from enforcing timeout.
     (root / 'suite_test.oc').write_text('''package suite; import "testing";
 func TestManyLogs(t *testing.T) {
-    bytes := i8[]{};
+    bytes := []i8{};
     for (i := 0; i < 2000; i++) bytes.append('x');
     for (i := 0; i < 200; i++) t.Log(bytes->string);
     for (;;) {}

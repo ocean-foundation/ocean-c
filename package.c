@@ -205,7 +205,7 @@ static Module *findModule(packageBuild *b, const char *location) {
                     else module->name = pkgString(b, part[1]);
                     continue;
                 }
-                if (!strcmp(part[0], "go") || !strcmp(part[0], "ocean")) continue;
+                if (!strcmp(part[0], "ocean")) continue;
                 if (!strcmp(part[0], "require") || !strcmp(part[0], "replace")) {
                     directive = !strcmp(part[0], "require") ? 1 : 2; start = 1;
                     if (n == 2 && !strcmp(part[1], "(")) { block = directive; continue; }
@@ -721,9 +721,9 @@ static void rewriteType(Rewrite *r, Local *scope, typeTokens *type) {
             Symbol *s = importedSymbol(r, imported, member, name.lexeme);
             if (s) { member.lexeme = s->qualified; tokens[count++] = member; i += 2; continue; }
         }
+        // array<T> is the built-in length-erased array type wherever it appears.
         if (!(name.type == IDENTIFIER && !strcmp(name.lexeme, "array") &&
-              (i == 0 || type->tokens[i - 1].type == LESS_THAN ||
-               type->tokens[i - 1].type == STAR || type->tokens[i - 1].type == BITWISE_OR)))
+              i + 1 < type->nTokens && type->tokens[i + 1].type == LESS_THAN))
             if (!i || type->tokens[i - 1].type != DOT) rewriteToken(r, scope, &name);
         tokens[count++] = name;
     }
@@ -1283,4 +1283,260 @@ const char *packageDirectory(packageBuild *build) {
 void visitPackageImports(packageBuild *build, packageImportVisitor visitor, void *context) {
     for(Package *p=build->packages;p;p=p->next)for(File *file=p->files;file;file=file->next)
         for(Import *i=file->imports;i;i=i->next)visitor(file->displayPath,i->alias,i->package->id+1,i->path,context);
+}
+
+/* ---- ocean fix: rewrite legacy postfix type syntax ---------------------------------- */
+
+typedef struct FixNames { char **items; size_t count; } FixNames;
+static void fixName(FixNames *names, const char *name) {
+    for (size_t i = 0; i < names->count; i++) if (!strcmp(names->items[i], name)) return;
+    names->items = realloc(names->items, (names->count + 1) * sizeof(char *));
+    if (!names->items) abort();
+    names->items[names->count++] = strdup(name);
+}
+static tokenlist *fixTokens(const char *text, const char *path) {
+    // Scanner recovery keeps going after lexical errors; fix never aborts the process.
+    return scanTokensForEditor((char *)text, (char *)path);
+}
+/* Declared type names in a directory's sources (token scan; works for either syntax). */
+static void fixDirectoryTypes(packageBuild *b, const char *dir, const char *qualifier,
+                              int exportedOnly, FixNames *names, char **packageName) {
+    DIR *handle = opendir(dir);
+    if (!handle) return;
+    struct dirent *entry;
+    while ((entry = readdir(handle))) {
+        size_t n = strlen(entry->d_name);
+        if (n < 4 || strcmp(entry->d_name + n - 3, ".oc")) continue;
+        char *path = format(b, "%s/%s", dir, entry->d_name);
+        char *text = readFile(b, path);
+        if (!text) continue;
+        tokenlist *tokens = fixTokens(text, path);
+        for (size_t i = 0; i + 1 < tokens->top; i++) {
+            token t = tokens->arr[i], next = tokens->arr[i + 1];
+            if (t.type == PACKAGE && next.type == IDENTIFIER && packageName && !*packageName)
+                *packageName = pkgString(b, next.lexeme);
+            if ((t.type == STRUCT || t.type == TYPE || t.type == ENUM || t.type == INTERFACE) &&
+                next.type == IDENTIFIER && (!exportedOnly || exportedName(next.lexeme))) {
+                if (qualifier) fixName(names, format(b, "%s.%s", qualifier, next.lexeme));
+                else fixName(names, next.lexeme);
+            }
+        }
+        free_tokenlist(tokens); free(tokens);
+    }
+    closedir(handle);
+}
+/* Import directories without downloading: module, module-relative, stdlib, replace, cache. */
+static char *fixImportDirectory(packageBuild *b, Module *module, const char *path) {
+    if (!validModulePath(path)) return NULL;
+    if (module && module->name && prefix(path, module->name))
+        return format(b, "%s%s", module->root, path + strlen(module->name));
+    if (module && directory(format(b, "%s/%s", module->root, path)))
+        return format(b, "%s/%s", module->root, path);
+    const char *standard = standardSource(b);
+    if (standard && directory(format(b, "%s/%s", standard, path))) return format(b, "%s/%s", standard, path);
+    Dependency *match = NULL;
+    for (Dependency *d = module ? module->dependencies : NULL; d; d = d->next)
+        if (prefix(path, d->name) && (!match || strlen(d->name) > strlen(match->name))) match = d;
+    if (!match) return NULL;
+    if (match->replacement && (match->replacement[0] == '.' || match->replacement[0] == '/'))
+        return format(b, "%s%s", match->replacement[0] == '/' ? match->replacement :
+                      format(b, "%s/%s", module->root, match->replacement), path + strlen(match->name));
+    const char *cache = getenv("OCEAN_MOD_CACHE"), *home = getenv("HOME");
+    if (!cache) cache = format(b, "%s/.cache/ocean/modules", home ? home : "/tmp");
+    return format(b, "%s/%s@%s%s", cache, match->name, match->version ? match->version : "latest",
+                  path + strlen(match->name));
+}
+static size_t fixOffset(const char *text, token at) {
+    size_t offset = 0;
+    for (long line = 1; text[offset] && line < at.line; offset++)
+        if (text[offset] == '\n') line++;
+    return offset + (size_t)(at.column > 0 ? at.column - 1 : 0);
+}
+static int compareRewrites(const void *a, const void *b) {
+    const typeRewrite *x = a, *y = b;
+    return x->first.line != y->first.line ? (x->first.line < y->first.line ? -1 : 1)
+         : (x->first.column > y->first.column) - (x->first.column < y->first.column);
+}
+/* Rewrite one file until no legacy spans remain. Returns rewrites applied, or -1. */
+static int fixFile(packageBuild *b, const char *path, FixNames *known) {
+    char *text = readFile(b, path);
+    if (!text) return -1;
+    char *current = strdup(text);
+    int total = 0;
+    for (int pass = 0; pass < 32; pass++) {
+        tokenlist *tokens = fixTokens(current, path);
+        typeRewrite *rewrites = NULL;
+        size_t count = parseTokensForFix(tokens, current, known->items, known->count, &rewrites);
+        free(tokens);
+        if (!count) { free(rewrites); break; }
+        qsort(rewrites, count, sizeof(*rewrites), compareRewrites);
+        size_t length = strlen(current), capacity = length * 2 + 64, used = 0, cursor = 0;
+        char *next = malloc(capacity);
+        if (!next) abort();
+        for (size_t i = 0; i < count; i++) {
+            size_t start = fixOffset(current, rewrites[i].first);
+            size_t end = fixOffset(current, rewrites[i].last) + strlen(rewrites[i].last.lexeme);
+            if (start < cursor || end > length || start > end) continue; // Nested: next pass.
+            size_t replacement = strlen(rewrites[i].text);
+            if (used + (start - cursor) + replacement + 1 > capacity) {
+                capacity = (used + (start - cursor) + replacement + 1) * 2;
+                next = realloc(next, capacity);
+                if (!next) abort();
+            }
+            memcpy(next + used, current + cursor, start - cursor); used += start - cursor;
+            memcpy(next + used, rewrites[i].text, replacement); used += replacement;
+            cursor = end;
+            total++;
+        }
+        if (used + (length - cursor) + 1 > capacity) {
+            capacity = used + (length - cursor) + 1;
+            next = realloc(next, capacity);
+            if (!next) abort();
+        }
+        memcpy(next + used, current + cursor, length - cursor); used += length - cursor;
+        next[used] = 0;
+        for (size_t i = 0; i < count; i++) free(rewrites[i].text);
+        free(rewrites);
+        free(current);
+        current = next;
+    }
+    int status = total;
+    if (total && strcmp(current, text)) {
+        char *temporary = format(b, "%s.ocean-fix-XXXXXX", path);
+        int fd = mkstemp(temporary);
+        FILE *out = fd >= 0 ? fdopen(fd, "wb") : NULL;
+        struct stat info;
+        if (!out || fputs(current, out) == EOF || fclose(out) ||
+            (!stat(path, &info) && chmod(temporary, info.st_mode & 07777)) || rename(temporary, path)) {
+            fprintf(stderr, "ocean fix: cannot write %s: %s\n", path, strerror(errno));
+            unlink(temporary);
+            status = -1;
+        }
+    }
+    free(current);
+    return status;
+}
+static int fixDirectory(packageBuild *b, const char *dir) {
+    FixNames known = {0};
+    char *name = NULL;
+    fixDirectoryTypes(b, dir, NULL, 0, &known, &name);
+    Module *module = findModule(b, dir);
+    DIR *handle = opendir(dir);
+    if (!handle) { fprintf(stderr, "ocean fix: cannot read %s\n", dir); return 1; }
+    char **files = NULL;
+    size_t nFiles = 0;
+    struct dirent *entry;
+    while ((entry = readdir(handle))) {
+        size_t n = strlen(entry->d_name);
+        if (n < 4 || strcmp(entry->d_name + n - 3, ".oc")) continue;
+        char *path = format(b, "%s/%s", dir, entry->d_name);
+        struct stat info;
+        if (stat(path, &info) || !S_ISREG(info.st_mode)) continue;
+        files = realloc(files, (nFiles + 1) * sizeof(char *));
+        if (!files) abort();
+        files[nFiles++] = path;
+    }
+    closedir(handle);
+    qsort(files, nFiles, sizeof(char *), compareNames);
+    // Exported types of imported packages, under each file's import name.
+    for (size_t f = 0; f < nFiles; f++) {
+        char *text = readFile(b, files[f]);
+        if (!text) continue;
+        tokenlist *tokens = fixTokens(text, files[f]);
+        for (size_t i = 0; i < tokens->top; i++) {
+            if (tokens->arr[i].type != IMPORT) continue;
+            size_t j = i + 1, group = tokens->arr[j].type == LEFT_PAREN;
+            if (group) j++;
+            while (j < tokens->top) {
+                const char *alias = NULL;
+                if (tokens->arr[j].type == IDENTIFIER || tokens->arr[j].type == UNDERSCORE || tokens->arr[j].type == DOT)
+                    alias = tokens->arr[j++].lexeme;
+                if (tokens->arr[j].type != LITERAL_STRING) break;
+                const char *importPath = tokens->arr[j++].lexeme;
+                if (tokens->arr[j].type == AS && j + 1 < tokens->top) { alias = tokens->arr[j + 1].lexeme; j += 2; }
+                char *location = fixImportDirectory(b, module, importPath);
+                if (location && directory(location) && (!alias || strcmp(alias, "_"))) {
+                    char *declared = NULL;
+                    FixNames ignored = {0};
+                    fixDirectoryTypes(b, location, NULL, 1, &ignored, &declared);
+                    for (size_t k = 0; k < ignored.count; k++) free(ignored.items[k]);
+                    free(ignored.items);
+                    const char *slash = strrchr(importPath, '/');
+                    const char *qualifier = alias ? alias : declared ? declared : slash ? slash + 1 : importPath;
+                    fixDirectoryTypes(b, location, strcmp(qualifier, ".") ? qualifier : NULL, 1, &known, NULL);
+                }
+                if (tokens->arr[j].type == COMMA || tokens->arr[j].type == SEMICOLON) j++;
+                if (!group || tokens->arr[j].type == RIGHT_PAREN) break;
+            }
+        }
+        free_tokenlist(tokens); free(tokens);
+    }
+    int failed = 0;
+    for (size_t f = 0; f < nFiles; f++) {
+        int changed = fixFile(b, files[f], &known);
+        if (changed < 0) failed = 1;
+        else if (changed) {
+            char *display = relativeSourcePath(files[f]);
+            printf("ocean fix: %s: %d type%s rewritten\n", display ? display : files[f], changed, changed == 1 ? "" : "s");
+            free(display);
+        }
+    }
+    for (size_t i = 0; i < known.count; i++) free(known.items[i]);
+    free(known.items); free(files);
+    (void)name;
+    return failed;
+}
+static int fixTree(packageBuild *b, const char *dir) {
+    int failed = 0, hasSource = 0;
+    DIR *handle = opendir(dir);
+    if (!handle) return 1;
+    struct dirent *entry;
+    char **children = NULL;
+    size_t nChildren = 0;
+    while ((entry = readdir(handle))) {
+        const char *n = entry->d_name;
+        size_t length = strlen(n);
+        if (length > 3 && !strcmp(n + length - 3, ".oc")) hasSource = 1;
+        if (n[0] == '.' || !strcmp(n, "vendor") || !strcmp(n, "node_modules")) continue;
+        char *path = format(b, "%s/%s", dir, n);
+        struct stat info;
+        if (lstat(path, &info) || !S_ISDIR(info.st_mode)) continue;
+        children = realloc(children, (nChildren + 1) * sizeof(char *));
+        if (!children) abort();
+        children[nChildren++] = path;
+    }
+    closedir(handle);
+    if (hasSource) failed |= fixDirectory(b, dir);
+    qsort(children, nChildren, sizeof(char *), compareNames);
+    for (size_t i = 0; i < nChildren; i++) failed |= fixTree(b, children[i]);
+    free(children);
+    return failed;
+}
+int fixPackages(int count, char **locations) {
+    packageBuild *b = calloc(1, sizeof(*b));
+    if (!b) return 1;
+    int failed = 0;
+    const char *fallback[] = {"."};
+    if (!count) { count = 1; locations = (char **)fallback; }
+    for (int i = 0; i < count; i++) {
+        char *location = pkgString(b, locations[i]);
+        size_t n = strlen(location);
+        int recursive = n >= 3 && !strcmp(location + n - 3, "...") && (n == 3 || location[n - 4] == '/');
+        if (recursive) location[n > 3 ? n - 4 : 0] = 0;
+        if (!*location) location = pkgString(b, ".");
+        char *path = canonical(b, location);
+        if (!path) { fprintf(stderr, "ocean fix: location does not exist: %s\n", locations[i]); failed = 1; continue; }
+        if (!directory(path)) {
+            size_t length = strlen(path);
+            if (length < 3 || strcmp(path + length - 3, ".oc")) {
+                fprintf(stderr, "ocean fix: expected an Ocean file or package directory: %s\n", locations[i]);
+                failed = 1; continue;
+            }
+            path = parent(b, path);
+        }
+        failed |= recursive ? fixTree(b, path) : fixDirectory(b, path);
+    }
+    failed |= b->errors != 0;
+    freePackage(b);
+    return failed;
 }

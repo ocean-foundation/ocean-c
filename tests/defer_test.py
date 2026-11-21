@@ -54,32 +54,32 @@ with tempfile.TemporaryDirectory(prefix="ocean defer ") as directory:
     case('func main() { if (recover() == null) emit(65); defer rescue(); }', "A")
     case('func again() { panic "new"; } func f() { defer rescue(); defer again(); } func main() { f(); emit(65); }', "RA")
     case('func printPanic() { p := recover(); s := p.(string); if (s == "message") emit(65); } func f() { defer printPanic(); panic "message"; } func main() { f(); }', "A")
-    case('func mutate(p int*) { *p = 7; } func f() (int n) { defer mutate(&n); return 2; } func main() int { return f(); }', "", 7)
-    case('func mutate(p int*) { *p = 8; } func f() (int n) { defer mutate(&n); defer rescue(); panic "x"; } func main() int { return f(); }', "R", 8)
+    case('func mutate(p *int) { *p = 7; } func f() (n int) { defer mutate(&n); return 2; } func main() int { return f(); }', "", 7)
+    case('func mutate(p *int) { *p = 8; } func f() (n int) { defer mutate(&n); defer rescue(); panic "x"; } func main() int { return f(); }', "R", 8)
     case('func generic<T>(v T) { emit(v->int); } struct S { c int; } func (s S) show() { emit(s.c); } func main() { s := S{65}; defer s.show(); s.c = 67; defer generic<int>(66); }', "BA")
     case('extern i32 printf(buffer<i8> format, ...); func main() { defer extern.printf("%d\\n\\0".data, 7); }', "7\n")
     case('func output(s string) { if (s == "hello") emit(65); } func main() { s := "hel" + "lo"; defer output(s); s = "other"; }', "A")
-    case('func values(xs ...int) { for (i := 0; i < len(xs); i++) emit(xs[i]); } func main() { a: int[] = {65,66}; defer values(a...); a[0] = 67; }', "AB")
+    case('func values(xs ...int) { for (i := 0; i < len(xs); i++) emit(xs[i]); } func main() { a: []int = {65,66}; defer values(a...); a[0] = 67; }', "AB")
 
     case('func f() { defer rescue(); defer recover(); panic "x"; } func main() { f(); }', "R")
-    case('func check(p int*) { emit(*p); } func main() { p := new(int); *p = 65; defer free(p); defer check(p); emit(66); }', "BA")
-    case('func main() { xs: int[] = {65,66}; defer free(xs); emit(67); }', "C")
-    case('func main() { xs: int[] = {65}; defer xs.append(66); defer emit(67); }', "C")
-    case('struct S { c int; } func (s S*) show() { emit(s.c); } func main() { s := S{65}; defer s.show(); s.c = 66; }', "B")
-    case('func set(p int*, v int) { *p = v; } func f() (int a, int b) { defer set(&a, 4); defer set(&b, 3); return 1,2; } func main() int { a,b := f(); return a*10+b; }', "", 43)
+    case('func check(p *int) { emit(*p); } func main() { p := new(int); *p = 65; defer free(p); defer check(p); emit(66); }', "BA")
+    case('func main() { xs: []int = {65,66}; defer free(xs); emit(67); }', "C")
+    case('func main() { xs: []int = {65}; defer xs.append(66); defer emit(67); }', "C")
+    case('struct S { c int; } func (s *S) show() { emit(s.c); } func main() { s := S{65}; defer s.show(); s.c = 66; }', "B")
+    case('func set(p *int, v int) { *p = v; } func f() (a, b int) { defer set(&a, 4); defer set(&b, 3); return 1,2; } func main() int { a,b := f(); return a*10+b; }', "", 43)
 
     case('func bad() int { panic "argument"; } func f() { defer rescue(); defer emit(bad()); } func main() { f(); }', "R")
     case('func empty() { p := recover(); if (p != null && p.(string) == "") emit(65); } func f() { defer empty(); panic ""; } func main() { f(); }', "A")
     case('func again() { panic "new"; } func f() { defer rescue(); defer again(); panic "old"; } func main() { f(); emit(65); }', "RA")
     case('func f() { defer emit(65); switch (1) { case 1: defer emit(66); } if (true) { defer emit(67); } return; } func main() { f(); }', "CBA")
 
-    case('func show(p string*) { if (*p == "kept") emit(65); } func main() { { s := "kept"; defer show(&s); } }', "A")
+    case('func show(p *string) { if (*p == "kept") emit(65); } func main() { { s := "kept"; defer show(&s); } }', "A")
 
-    case('extern i32 printf(buffer<i8> format, ...); func main() { args: int[] = {7,8}; defer extern.printf("%ld %ld\\n\\0".data, args...); emit(65); }', "A7 8\n")
+    case('extern i32 printf(buffer<i8> format, ...); func main() { args: []int = {7,8}; defer extern.printf("%ld %ld\\n\\0".data, args...); emit(65); }', "A7 8\n")
     case('extern i32 printf(buffer<i8> format, ...); func main() { n: any = 7; defer extern.printf("%ld\\n\\0".data, n); emit(65); }', "A7\n")
     case('func recover() int { return 7; } func main() int { return recover(); }', "", 7, prefix="package main;")
 
-    case('func show(p buffer<i8>) { emit(p[0]->int); } func main() { xs: i8[] = {65}; defer show(xs.data); xs[0] = 66; }', "B")
+    case('func show(p buffer<i8>) { emit(p[0]->int); } func main() { xs: []i8 = {65}; defer show(xs.data); xs[0] = 66; }', "B")
 
     case('func innerRescue() { recover(); emit(73); } func deferred() { defer innerRescue(); panic "new"; } func f() { defer rescue(); defer deferred(); panic "old"; } func main() { f(); }', "IR")
 

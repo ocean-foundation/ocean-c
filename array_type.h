@@ -16,41 +16,31 @@ static inline int mapTypeParts(typeTokens t, typeTokens *key, typeTokens *value)
     *value = (typeTokens){t.nTokens - i - 1, t.tokens + i + 1};
     return 1;
 }
-/* A buffer<T>[] remains a raw buffer; buffer<T>[N][] is an array of buffers. */
+/* Index after the ']' closing the bracket at t.tokens[open], or 0. */
+static inline size_t closingBracket(typeTokens t, size_t open) {
+    size_t depth = 0;
+    for (size_t i = open; i < t.nTokens; i++) {
+        if (t.tokens[i].type == LEFT_BRACKET) depth++;
+        if (t.tokens[i].type == RIGHT_BRACKET && !--depth) return i + 1;
+    }
+    return 0;
+}
+/* []T, optionally preceded by mixed: a dynamic array of T. */
 static inline int arrayElementType(typeTokens t, typeTokens *element) {
-    typeTokens key, value;
-    if (mapTypeParts(t, &key, &value)) return 0;
     if (t.nTokens && t.tokens[0].type == MIXED) { t.tokens++; t.nTokens--; }
-    // A leading pointer applies to the complete array type: *T[] is a pointer
-    // to an array, while T*[] is an array whose elements are pointers.
-    if (t.nTokens && t.tokens[0].type == STAR)
+    if (t.nTokens < 3 || t.tokens[0].type != LEFT_BRACKET || t.tokens[1].type != RIGHT_BRACKET)
         return 0;
-    if (t.nTokens < 3 || t.tokens[t.nTokens - 2].type != LEFT_BRACKET ||
-        t.tokens[t.nTokens - 1].type != RIGHT_BRACKET)
-        return 0;
-    typeTokens ignored, dimension;
-    if (bufferTypeParts(t, &ignored, &dimension))
-        return 0;
-    *element = (typeTokens){t.nTokens - 2, t.tokens};
+    *element = (typeTokens){t.nTokens - 2, t.tokens + 2};
     return 1;
 }
-/* Split the outer sized suffix, preserving nested dimensions and generic types. */
+/* [N]T or [n]T: the outer dimension and its element type. */
 static inline int sizedArrayTypeParts(typeTokens t, typeTokens *element, typeTokens *dimension) {
-    typeTokens key, value;
-    if (mapTypeParts(t, &key, &value)) return 0;
-    if (t.nTokens < 4 || t.tokens[0].type == STAR ||
-        t.tokens[t.nTokens - 1].type != RIGHT_BRACKET) return 0;
-    typeTokens ignored;
-    if (bufferTypeParts(t, &ignored, dimension)) return 0;
-    size_t close = t.nTokens - 1, depth = 1, end = close;
-    while (close && depth) {
-        close--;
-        if (t.tokens[close].type == RIGHT_BRACKET) depth++;
-        if (t.tokens[close].type == LEFT_BRACKET) depth--;
-    }
-    if (depth || !close || end == close + 1) return 0;
-    *element = (typeTokens){close, t.tokens};
-    *dimension = (typeTokens){end - close - 1, t.tokens + close + 1};
+    if (t.nTokens < 4 || t.tokens[0].type != LEFT_BRACKET || t.tokens[1].type == RIGHT_BRACKET)
+        return 0;
+    size_t end = closingBracket(t, 0);
+    if (!end || end >= t.nTokens) return 0;
+    *dimension = (typeTokens){end - 2, t.tokens + 1};
+    *element = (typeTokens){t.nTokens - end, t.tokens + end};
     return 1;
 }
 static inline int arrayHasRuntimeDimension(typeTokens t) {
@@ -75,7 +65,7 @@ static inline int unsizedArrayTypeParts(typeTokens t, typeTokens *element) {
     return 1;
 }
 static inline int builtinStorageTypeName(const char *name) {
-    const char *names[] = {"int", "uint", "byte", "rune",  "i8",  "i16", "i32",  "i64",   "u8",
+    const char *names[] = {"int", "uint", "i8",  "i16", "i32",  "i64",   "u8",
                            "u16", "u32",  "u64",  "float", "f32", "f64", "bool", "string", "any"};
     for (size_t i = 0; i < sizeof(names) / sizeof(*names); i++)
         if (!strcmp(name, names[i]))

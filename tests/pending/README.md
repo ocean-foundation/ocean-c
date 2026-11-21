@@ -76,7 +76,6 @@ CMake configure dependency, so changing cases refreshes test registration.
 | `label_resolution` | semantic | 5 | existing |
 | `extern_linkage` | semantic | 2 | existing |
 | `struct_value_application` | semantic | 3 | proposed |
-| `index_delegation` | semantic | 2 | existing |
 | `cleanup` | ownership | 2 | existing |
 
 `existing` means fixtures use currently documented syntax, except for the

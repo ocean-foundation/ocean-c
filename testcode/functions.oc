@@ -13,7 +13,7 @@ func forward(values ...int) (int, int) {
 }
 
 func main() int {
-    numbers := int[3];
+    numbers := [3]int;
     numbers.data = {1, 2, 3};
     total, count := forward(numbers...);
     total, count = count, total;

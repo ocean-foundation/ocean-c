@@ -59,6 +59,7 @@ target_sources(ocean-c
         token.c
         scanner.c
         parser.c
+        legacy_types.c
         ast.c
         semantic.c
         backend.c
@@ -84,7 +85,7 @@ if(BUILD_TESTING)
     set(ocean_test_targets function_parser_test parser_features_test parser_edges_test parser_extensions_test)
     foreach(test_name IN LISTS ocean_test_targets)
         # Parser suites include parser.c to inspect internal error paths.
-        add_executable(${test_name} tests/${test_name}.c scanner.c token.c dynarray.c)
+        add_executable(${test_name} tests/${test_name}.c scanner.c token.c dynarray.c legacy_types.c)
     endforeach()
     if(UNIX)
         # These suites isolate exiting/aborting APIs with POSIX subprocesses.
@@ -95,7 +96,7 @@ if(BUILD_TESTING)
         add_executable(ast_test tests/ast_test.c ast.c)
         list(APPEND ocean_test_targets ast_test)
     endif()
-    add_executable(semantic_test tests/semantic_test.c semantic.c parser.c scanner.c token.c dynarray.c)
+    add_executable(semantic_test tests/semantic_test.c semantic.c parser.c legacy_types.c scanner.c token.c dynarray.c)
     list(APPEND ocean_test_targets semantic_test)
     add_executable(hashmap_test tests/hashmap_test.c c-hashmap/map.c)
     list(APPEND ocean_test_targets hashmap_test)
@@ -156,7 +157,7 @@ if(BUILD_TESTING)
     add_test(NAME semantic_diagnostics_test COMMAND ${Python3_EXECUTABLE}
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/semantic_diagnostics_test.py" "$<TARGET_FILE:ocean-c>")
     set_tests_properties(semantic_diagnostics_test PROPERTIES TIMEOUT 30)
-    add_executable(pending_probe tests/pending_probe.c parser.c scanner.c token.c dynarray.c ast.c)
+    add_executable(pending_probe tests/pending_probe.c parser.c legacy_types.c scanner.c token.c dynarray.c ast.c)
     target_compile_options(pending_probe PRIVATE -UNDEBUG)
     if(UNIX)
         target_link_libraries(pending_probe PRIVATE m)
@@ -198,7 +199,7 @@ if(BUILD_TESTING)
 
 
     add_executable(asm_backend_probe platform.c c-hashmap/map.c tests/asm_backend_probe.c ast.c dynarray.c
-        token.c scanner.c parser.c build_cache.c llvm_packages.c)
+        token.c scanner.c parser.c legacy_types.c build_cache.c llvm_packages.c)
     target_include_directories(asm_backend_probe PRIVATE "${OCEAN_FFI_INCLUDE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
     if(UNIX)
         target_link_libraries(asm_backend_probe PRIVATE m)
@@ -226,6 +227,9 @@ if(BUILD_TESTING)
     add_test(NAME type_lists_test COMMAND ${Python3_EXECUTABLE}
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/type_lists_test.py" "$<TARGET_FILE:ocean-c>" "${OCEAN_CLANG_EXECUTABLE}")
     set_tests_properties(type_lists_test PROPERTIES TIMEOUT 90)
+    add_test(NAME type_assertion_test COMMAND ${Python3_EXECUTABLE}
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/type_assertion_test.py" "$<TARGET_FILE:ocean-c>" "${OCEAN_CLANG_EXECUTABLE}")
+    set_tests_properties(type_assertion_test PROPERTIES TIMEOUT 90)
     add_test(NAME type_constraints_test COMMAND ${Python3_EXECUTABLE}
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/type_constraints_test.py" "$<TARGET_FILE:ocean-c>" "${OCEAN_CLANG_EXECUTABLE}")
     set_tests_properties(type_constraints_test PROPERTIES TIMEOUT 60)
@@ -356,6 +360,9 @@ if(BUILD_TESTING)
     add_test(NAME runtime_array_test COMMAND ${Python3_EXECUTABLE}
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_array_test.py" "$<TARGET_FILE:ocean-c>" "${OCEAN_CLANG_EXECUTABLE}")
     set_tests_properties(runtime_array_test PROPERTIES TIMEOUT 60)
+    add_test(NAME prefix_types_test COMMAND ${Python3_EXECUTABLE}
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/prefix_types_test.py" "$<TARGET_FILE:ocean-c>")
+    set_tests_properties(prefix_types_test PROPERTIES TIMEOUT 120)
     add_test(NAME collection_types_test COMMAND ${Python3_EXECUTABLE}
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/collection_types_test.py" "$<TARGET_FILE:ocean-c>" "${OCEAN_CLANG_EXECUTABLE}")
     set_tests_properties(collection_types_test PROPERTIES TIMEOUT 60)

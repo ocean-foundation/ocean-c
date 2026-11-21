@@ -9,6 +9,6 @@ func main() {
     if (b1 != b2) {
         io.Println("yes");
     }
-    bp: bool* = &b1;
-    bp2: bool* = &b2;
+    bp: *bool = &b1;
+    bp2: *bool = &b2;
 }

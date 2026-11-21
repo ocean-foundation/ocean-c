@@ -69,6 +69,17 @@ parseResult parseTokensForEditor(tokenlist *tokens, const char *source);
 struct stmt_interface *parseInterfaceType(typeTokens span);
 struct stmt_func *parseFunctionType(typeTokens span);
 expr *parseBufferDimension(typeTokens dimension);
+
+/* `ocean fix`: a legacy postfix type span and its prefix replacement. */
+typedef struct typeRewrite {
+    token first, last; // Inclusive source tokens covered by the rewrite.
+    char *text;
+} typeRewrite;
+/* Parse in fix mode, collecting legacy type rewrites instead of reporting them.
+ * knownTypes lists type names (and alias.Name qualified names) used to recognize
+ * legacy T[n] allocation expressions. Returns the number of rewrites. */
+size_t parseTokensForFix(tokenlist *tokens, const char *source, char **knownTypes,
+                         size_t nKnownTypes, typeRewrite **rewrites);
 char parseTypeApplicationArguments(typeTokens span, typeTokens **arguments, size_t *count);
 
 #endif

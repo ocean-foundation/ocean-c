@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='ocean recoverable ') as directory:
 
     program('''func main() {
         bad := os.FromDescriptor(2147483647, true, true);
-        if (bad.Readchunk(1) != Result<i8[]>.error || bad.Read() != Result<int>.error ||
+        if (bad.Readchunk(1) != Result<[]i8>.error || bad.Read() != Result<int>.error ||
             bad.Write("x") != Result<int>.error || bad.PollRead() != Result<int>.error ||
             bad.Size() != Result<int>.error) panic "native errors";
         scanner := io.NewScanner(bad);

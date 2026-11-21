@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='ocean result ') as directory:
                 assert result.returncode == 0, (opt, result)
 
     # No import is needed, and generic payloads retain ordinary ownership rules.
-    program('''struct S { text string; values int[2]; }
+    program('''struct S { text string; values [2]int; }
 func forward<T>(value Result<T>, fallback T) T { return value.unwrapOrElse(fallback); }
 func main() int {
     value := Result<int>.value(7); error := Result<int>.error("bad");
@@ -58,7 +58,7 @@ func main() int {
     if (p != zero(*int)) return 4;
     record := Result<S>.error("bad").unwrapOrZero();
     if (record.text != "" || record.values[0] != 0) return 5;
-    values := Result<int[]>.value(int[]{1, 2}).unwrap(); values[0] = 9;
+    values := Result<[]int>.value([]int{1, 2}).unwrap(); values[0] = 9;
     result := Result<S>.value(S{"owned", {3, 4}});
     a := result.unwrap(); a.text = "changed"; a.values[0] = 99;
     b := result.unwrap();
@@ -96,7 +96,7 @@ func main() int {
     program('func main() { Result<int>.value(1).error(); }',
             error='Panic: Result.error() called on a value result')
 
-    program('''struct Payload { text string; values int[2]; }
+    program('''struct Payload { text string; values [2]int; }
 func extract<T>(value Optional<T>) T { return value.unwrap(); }
 func main() int {
     if (Optional<int>.value(42).unwrap() != 42) return 1;

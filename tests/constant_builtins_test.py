@@ -23,21 +23,21 @@ with tempfile.TemporaryDirectory(prefix="ocean constant builtins ") as directory
     root = Path(directory)
     source, ir, executable = (root / name for name in ("constants.oc", "module.ll", "native"))
     source.write_text('''package main;
-extern i32 puts(buffer<i8>[] text);
+extern i32 puts(buffer<i8> text);
 struct Plain { number int; flag bool; }
 struct Payload<T> { header bool; tag i8; value T; name string;
-                    slots buffer<string>[4]; child *Payload<T>; }
+                    slots buffer<string, 4>; child *Payload<T>; }
 struct Inspector<T> { value T; }
 func scalarZero() int { return zero(int); }
 func plainZero() Plain { return zero(Plain); }
 func aggregateZero() Payload<int> { return zero(Payload<int>); }
-func bufferZero() buffer<string>[64] { return zero(buffer<string>[64]); }
+func bufferZero() buffer<string, 64> { return zero(buffer<string, 64>); }
 func emptyZero() string { return zero(string); }
 func intSize() int { return sizeof(int); }
 func paddedSize() int { return sizeof(Payload<int>); }
-func fixedSize() int { return sizeof(buffer<i8>[17]); }
+func fixedSize() int { return sizeof(buffer<i8, 17>); }
 func referenceSize() int { return sizeof(string); }
-func valueSize() int { return sizeof(zero(buffer<string>[64])); }
+func valueSize() int { return sizeof(zero(buffer<string, 64>)); }
 func typeSize<T>() int { return sizeof(T); }
 func defaultOf<T>() T { return zero(T); }
 func (i Inspector<T>) bytes() int { return sizeof(T); }

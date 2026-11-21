@@ -18,7 +18,7 @@ struct MazeObj {
 // Value parameters are immutable fields, followed by ordinary mutable fields.
 // Nested dynamic arrays own their rows; access them through the named field.
 struct Matrix<T>(width, height int) {
-    underlying T[][];
+    underlying [][]T;
 }
 
 // Custom struct operations use named receiver methods.

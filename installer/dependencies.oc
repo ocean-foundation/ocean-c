@@ -18,20 +18,20 @@ func hasCommand(name string) bool { return !exec.LookPath(name).hasError(); }
 func dependencyManager() string {
     if (platform == "macos") return "brew";
     if (platform == "windows") return "msys2";
-    for (_, name := range string[]{"apt-get","dnf","pacman","zypper","apk"}) { if (hasCommand(name)) return name; }
+    for (_, name := range []string{"apt-get","dnf","pacman","zypper","apk"}) { if (hasCommand(name)) return name; }
     panic "no supported system package manager found; select a user-local bundle";
 }
-func systemDependencyCommand(manager string) string[] {
-    if (manager == "apt-get") return string[]{"apt-get","install","-y","clang","lld","build-essential","libffi-dev","libcurl4-openssl-dev","pkg-config"};
-    if (manager == "dnf") return string[]{"dnf","install","-y","clang","lld","make","glibc-devel","libffi-devel","libcurl-devel","pkgconf-pkg-config"};
-    if (manager == "pacman") return string[]{"pacman","-S","--needed","--noconfirm","clang","lld","base-devel","libffi","curl","pkgconf"};
-    if (manager == "zypper") return string[]{"zypper","--non-interactive","install","clang","lld","make","glibc-devel","libffi-devel","libcurl-devel","pkg-config"};
-    if (manager == "apk") return string[]{"apk","add","clang","lld","build-base","libffi-dev","curl-dev","pkgconf"};
-    if (manager == "brew") return string[]{"brew","install","llvm","libffi","curl","pkgconf"};
-    return string[]{};
+func systemDependencyCommand(manager string) []string {
+    if (manager == "apt-get") return []string{"apt-get","install","-y","clang","lld","build-essential","libffi-dev","libcurl4-openssl-dev","pkg-config"};
+    if (manager == "dnf") return []string{"dnf","install","-y","clang","lld","make","glibc-devel","libffi-devel","libcurl-devel","pkgconf-pkg-config"};
+    if (manager == "pacman") return []string{"pacman","-S","--needed","--noconfirm","clang","lld","base-devel","libffi","curl","pkgconf"};
+    if (manager == "zypper") return []string{"zypper","--non-interactive","install","clang","lld","make","glibc-devel","libffi-devel","libcurl-devel","pkg-config"};
+    if (manager == "apk") return []string{"apk","add","clang","lld","build-base","libffi-dev","curl-dev","pkgconf"};
+    if (manager == "brew") return []string{"brew","install","llvm","libffi","curl","pkgconf"};
+    return []string{};
 }
-func runInherited(args string[]) {
-    require(len(args) > 0,"missing dependency command"); rest := string[]{};
+func runInherited(args []string) {
+    require(len(args) > 0,"missing dependency command"); rest := []string{};
     for (i := 1; i < len(args); i++) rest.append(args[i]);
     c := exec.Command(args[0],rest...); require(!c.Run().hasError(),"dependency command failed: "+args[0]);
 }
@@ -54,13 +54,13 @@ func installSystemDependencies(plan map[string]any) {
     manager := text(plan["manager"]);
     if (manager == "msys2") {
         root := text(plan["msys"]);
-        if (!directory(root)) runInherited(string[]{"winget.exe","install","--id","MSYS2.MSYS2","--exact","--scope","machine","--silent","--accept-package-agreements","--accept-source-agreements"});
+        if (!directory(root)) runInherited([]string{"winget.exe","install","--id","MSYS2.MSYS2","--exact","--scope","machine","--silent","--accept-package-agreements","--accept-source-agreements"});
         bash := pathJoin(root,"usr/bin/bash.exe"); require(exists(bash),"MSYS2 shell not found after dependency installation");
         prefix := architecture == "aarch64" ? "mingw-w64-clang-aarch64-" : "mingw-w64-clang-x86_64-";
         script := "pacman -Sy --needed --noconfirm " + prefix + "clang " + prefix + "lld " + prefix + "libffi " + prefix + "curl " + prefix + "pkgconf";
-        runInherited(string[]{bash,"-lc",script});
+        runInherited([]string{bash,"-lc",script});
     } else {
-        if (manager == "apt-get") runInherited(string[]{"apt-get","update"});
+        if (manager == "apt-get") runInherited([]string{"apt-get","update"});
         runInherited(systemDependencyCommand(manager));
     }
 }
@@ -73,7 +73,7 @@ func dependencyPath(plan map[string]any) string {
 func extendPathPlan(plan map[string]any, extra string) map[string]any {
     if (extra == "") return plan;
     if (platform == "windows") { plan["extraBin"] = extra; return plan; }
-    items := mixed any[]{};
+    items := mixed []any{};
     for (_, raw := range array(plan["entries"])) {
         item := object(raw);
         if (flag(item["whole"])) item["content"] = text(item["content"]) + extra + "\n";
@@ -108,7 +108,7 @@ func localDependencies(work string, payload string, release Release, destination
     if (platform == "macos") {
         sdk := exec.Command("xcrun","--show-sdk-path"); result := sdk.Output();
         if (result.hasError()) {
-            if (yes("Apple's Command Line Tools SDK is missing. Launch Apple's system installer?")) runInherited(string[]{"xcode-select","--install"});
+            if (yes("Apple's Command Line Tools SDK is missing. Launch Apple's system installer?")) runInherited([]string{"xcode-select","--install"});
             panic "complete the Apple SDK installation, then rerun Ocean setup; existing Ocean was preserved";
         }
         config := "-isysroot\n\"" + replace(trim(result.unwrap()),"\"","\\\"") + "\"\n-I<CFGDIR>/../include\n-L<CFGDIR>/../lib\n-Wl,-rpath,<CFGDIR>/../lib\n";

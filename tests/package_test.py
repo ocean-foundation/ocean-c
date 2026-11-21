@@ -58,6 +58,12 @@ with tempfile.TemporaryDirectory(prefix="ocean packages ") as temporary:
     write(root / "math/value.oc", 'package math; func Answer() int { return other(); } '
           'func main() { panic "imported main must not run"; }')
     write(root / "math/other.oc", 'package math; func other() int { return 4; }')
+    valid_manifest = manifest.read_text()
+    write(manifest, valid_manifest + 'go 1.26\n')
+    invalid_manifest = invoke("check", ".", status=1, contains="invalid module directive")
+    assert "ocean.mod" in invalid_manifest.stderr, invalid_manifest
+    invoke("fix", ".", status=1, contains="invalid module directive")
+    write(manifest, valid_manifest)
     invoke("run", ".", status=7)
     invoke("run", root / "main.oc", status=7)
     invoke("build", ".", "-o", base / "program")
@@ -74,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix="ocean packages ") as temporary:
     # cleanup must not free those tokens again, on success or semantic failure.
     ownership = base / "index-ownership"
     write(ownership / "main.oc", 'package main; func main() int { '
-          'items := int[2]; i := 0; items[i] = 7; return items[i]; }')
+          'items := [2]int; i := 0; items[i] = 7; return items[i]; }')
     invoke("run", ownership, status=7)
     write(ownership / "bad.oc", 'package main; '
           'extern i32 printf(buffer<i8>, ...); '
@@ -110,7 +116,7 @@ with tempfile.TemporaryDirectory(prefix="ocean packages ") as temporary:
     write(receivers / "ocean.mod", 'module example.com/receivers\nocean 0.1\n')
     write(receivers / "lib/types.oc", 'package lib; struct Box<T> { value T; } '
           'type Count int; type Alias = Count;')
-    for owner in ('Box<T>', '*Box<T>', 'Box<T>*', 'Count', 'Alias', 'Local'):
+    for owner in ('Box<T>', '*Box<T>', 'Count', 'Alias', 'Local'):
         write(receivers / "main.oc", 'package main; import . "lib"; '
               'type Local = Alias; func (value ' + owner + ') Extra() {} func main() {}')
         invoke('build', '--check', receivers, status=1,
@@ -134,19 +140,19 @@ with tempfile.TemporaryDirectory(prefix="ocean packages ") as temporary:
           'func mathAlias() int { return math.Answer(); } '
           'func main() int { math.Bump(); return helper() + math.Counter; }')
     invoke("run", ".", status=9)
-    write(root / "helper.oc", 'package main; items: int[] = {1, 2}; '
+    write(root / "helper.oc", 'package main; items: []int = {1, 2}; '
           'func helper() { items = {7, 8, 9}; }')
     write(root / "main.oc", 'package main; func main() int { helper(); return items[0] + len(items); }')
     invoke("run", ".", status=10)
 
-    write(root / "helper.oc", 'package main; items: int[] = {}; '
-          'func helper() { for (i := 0; i < 100; i++) { a := int[100000]; a.data = {7}; items = a; } }')
+    write(root / "helper.oc", 'package main; items: []int = {}; '
+          'func helper() { for (i := 0; i < 100; i++) { a := [100000]int; a.data = {7}; items = a; } }')
     write(root / "main.oc", 'package main; func main() int { helper(); return items[0]; }')
     invoke("run", ".", status=7)
 
-    write(root / "helper.oc", 'package main; nested: int[][] = {{1, 2}, {3}}; '
-          'items: int[] = make(); '
-          'func make() int[] { return int[]{4, 5}; } '
+    write(root / "helper.oc", 'package main; nested: [][]int = {{1, 2}, {3}}; '
+          'items: []int = make(); '
+          'func make() []int { return []int{4, 5}; } '
           'func helper() { nested[0] = {7, 8, 9}; items = make(); }')
     write(root / "main.oc", 'package main; func main() int { helper(); return nested[0][0] + items[0]; }')
     invoke("run", ".", status=11)
@@ -156,15 +162,15 @@ with tempfile.TemporaryDirectory(prefix="ocean packages ") as temporary:
     write(root / "main.oc", 'package main; func main() int { return first + second + third + counter; }')
     invoke("run", ".", status=8)
 
-    write(root / "helper.oc", 'package main; raw: buffer<int>[] = {3, 4}; '
-          'nested: buffer<int[]>[] = {{5, 6}}; '
+    write(root / "helper.oc", 'package main; raw: buffer<int> = {3, 4}; '
+          'nested: buffer<[]int> = {{5, 6}}; '
           'func helper() { raw[0]++; nested[0][0]++; }')
     write(root / "main.oc", 'package main; func main() int { helper(); return raw[0] + nested[0][0]; }')
     invoke("run", ".", status=10)
 
     write(root / "helper.oc", 'package main; struct S { text string; } '
-          'p: *S = &S{text: "safe"}; text: i8[] = "hello\\0"; '
-          'func helper() { a := int[10000]; a.data = {8}; }')
+          'p: *S = &S{text: "safe"}; text: []i8 = "hello\\0"; '
+          'func helper() { a := [10000]int; a.data = {8}; }')
     write(root / "main.oc", 'package main; func main() int { helper(); '
           'if (p.text != "safe" || text[0] != 104 || text[5] != 0) return 1; return 0; }')
     invoke("run", ".")
@@ -291,7 +297,7 @@ with tempfile.TemporaryDirectory(prefix="ocean packages ") as temporary:
     write(root / 'main.oc', 'package main;\nfunc main() int {\n return helper();\n}\n')
     result = invoke('run', '.', status=1, contains="main.oc:3:")
     assert '3 |  return helper();' in result.stderr and 'at helper (' in result.stderr, result
-    write(root / 'helper.oc', 'package main;\nfunc helper() int {\n a := int[0];\n return a[1];\n}\n')
+    write(root / 'helper.oc', 'package main;\nfunc helper() int {\n a := [0]int;\n return a[1];\n}\n')
     invoke('run', '.', status=1, contains="helper.oc:4:")
     write(root / 'helper.oc', 'package main;\nfunc helper() int {\n x: bool = 42;\n return 0;\n}\n')
     result = invoke('build', '.', status=1, contains="helper.oc:3:")
@@ -348,8 +354,8 @@ with tempfile.TemporaryDirectory(prefix="ocean packages ") as temporary:
           'func main() int { return extern.getchar(); }')
     invoke('run', '.', status=65, input='A')
     # A runtime trap must be visible even when the program prints nothing.
-    write(root / 'main.oc', 'package main; struct Stack<T> { underlying T[]; top int; } '
-          'func (s *Stack<T>) grow() { s.underlying = T[1]; } '
+    write(root / 'main.oc', 'package main; struct Stack<T> { underlying []T; top int; } '
+          'func (s *Stack<T>) grow() { s.underlying = [1]T; } '
           'func main() { s: Stack<int> = {}; s.grow(); p: *int = null; *p = 1; }')
     result = invoke('run', '.', status=128 + signal.SIGILL,
                     contains=f'program terminated by signal {signal.SIGILL}')

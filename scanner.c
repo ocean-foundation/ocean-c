@@ -265,7 +265,9 @@ static tokenlist *scanTokensMode(char *source, char *filename, int recovery) {
             COMPOUNDABLE_SIMPLE_OPERATOR("*", STAR)
             COMPOUNDABLE_SIMPLE_OPERATOR("%", MODULO)
             COMPOUNDABLE_SIMPLE_OPERATOR("^", XOR)
-            COMPOUNDABLE_SIMPLE_OPERATOR("~", TILDE)
+            case '~': // Unary only, so there is no ~= compound assignment.
+                push_tokenlist(list, (token){.type = TILDE, .lexeme = "~", .line = state.thisLine, .column = state.thisColumn, .filename = filename});
+                break;
             case ':':
                 push_tokenlist(list, (token){.type = COLON, .lexeme = ":", .line = state.thisLine, .column = state.thisColumn, .filename = filename});
                 break;

@@ -101,7 +101,7 @@ func main() int {{ a := 7; f := 2.5;
     for declaration, message in (
         ('', 'unresolved asm operand'),
         ('missing := "text";', 'mutable scalar'),
-        ('missing := int[]{1};', 'mutable scalar'),
+        ('missing := []int{1};', 'mutable scalar'),
     ):
         diagnostic = build('func main() { ' + declaration +
                            ' asm x86_64 { mov rax, ${missing} } }', False)

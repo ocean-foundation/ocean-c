@@ -95,8 +95,8 @@ int64_t liveAllocations(void) { return live; }
     }''')
 
     program('''struct Child { value int; }
-    struct Value { title string; numbers int[]; child Child; boxed any; fixed int[2]; pointer *int; }
-    struct Sized(count int) { data string[count]; }
+    struct Value { title string; numbers []int; child Child; boxed any; fixed [2]int; pointer *int; }
+    struct Sized(count int) { data [count]string; }
     func snapshot() array<reflect.Field> {
         source := Value{"original", {1, 2}, Child{3}, "boxed", {4, 5}, null};
         return reflect.Fields(source);
@@ -106,11 +106,11 @@ int64_t liveAllocations(void) { return live; }
         for (i := 0; i < 30; i++) {
             fields := snapshot();
             if (len(fields) != 6 || fields[0].Value.(string) != "original") return 1;
-            numbers := fields[1].Value.(int[]); numbers[0] = 9;
-            unchanged := fields[1].Value.(int[]); if (unchanged[0] != 1) return 2;
+            numbers := fields[1].Value.([]int); numbers[0] = 9;
+            unchanged := fields[1].Value.([]int); if (unchanged[0] != 1) return 2;
             child := reflect.Fields(fields[2].Value); if (child[0].Value.(int) != 3) return 3;
             if (fields[3].Value.(string) != "boxed") return 4;
-            fixed := fields[4].Value.(int[2]); if (fixed[1] != 5) return 5;
+            fixed := fields[4].Value.([2]int); if (fixed[1] != 5) return 5;
             other := fields; fields[0].Value = "changed";
             if (other[0].Value.(string) != "original") return 6;
             sized := Sized{2, {"one", "two"}}; parameters := reflect.Fields(sized);
@@ -126,7 +126,7 @@ int64_t liveAllocations(void) { return live; }
     func main() int { if (exercise() != 0) return 99; return extern.liveAllocations(); }''', memory=True)
 
     program('''func main() int {
-        a: int[2] = {1, 2}; b: int[] = {1, 2};
+        a: [2]int = {1, 2}; b: []int = {1, 2};
         if (reflect.IsStruct("string") || reflect.IsStruct(a) || reflect.IsStruct(b)) return 1;
         if (len(reflect.Fields(false)) != 0 || len(reflect.Fields("string")) != 0 || len(reflect.Fields(a)) != 0) return 2;
         return 0;
@@ -136,7 +136,7 @@ int64_t liveAllocations(void) { return live; }
     enum Box<T> { Value(T), Empty }
     struct Nested { event Event; }
     func snapshot() array<reflect.Field> {
-        return reflect.Fields(Box<string[]>.Value(string[]{"original"}));
+        return reflect.Fields(Box<[]string>.Value([]string{"original"}));
     }
     func exercise() int {
         for (i := 0; i < 30; i++) {
@@ -152,8 +152,8 @@ int64_t liveAllocations(void) { return live; }
             if (!reflect.IsStruct(payload) || reflect.Fields(payload)[0].Name != "x") return 12;
             fixed := reflect.Fields(Event.Fixed);
             if (len(fixed) != 1 || fixed[0].Name != "" || fixed[0].Value.(string) != "fixed") return 6;
-            stored := snapshot(); copy := stored[0].Value.(string[]); copy[0] = "changed";
-            if (stored[0].Value.(string[])[0] != "original") return 7;
+            stored := snapshot(); copy := stored[0].Value.([]string); copy[0] = "changed";
+            if (stored[0].Value.([]string)[0] != "original") return 7;
             nested := reflect.Fields(Nested{key})[0].Value;
             if (!reflect.IsEnum(nested) || reflect.Fields(nested)[1].Value.(string) != "key") return 8;
             if (reflect.EnumVariant(false) != "" || reflect.EnumVariant(&unit) != "" || reflect.IsEnum(&unit)) return 9;

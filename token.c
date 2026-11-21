@@ -170,8 +170,6 @@ char *getTokenTypeStr(enum tokenType t) {
             return "MODULO_EQUALS";
         case XOR_EQUALS:
             return "XOR_EQUALS";
-        case TILDE_EQUALS:
-            return "TILDE_EQUALS";
         case BITSHIFT_LEFT_EQUALS:
             return "BITSHIFT_LEFT_EQUALS";
         case BITSHIFT_RIGHT_EQUALS:

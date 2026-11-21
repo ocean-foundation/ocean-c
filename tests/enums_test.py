@@ -87,12 +87,12 @@ func main() int {
     return 98;
 }''', 8)
 
-    program('''enum Data { Text(string), Values{items int[], label string}, Empty }
-func make() Data { a := int[]{2, 3}; result := Data.Values{a, "hello"}; a[0] = 99; return result; }
+    program('''enum Data { Text(string), Values{items []int, label string}, Empty }
+func make() Data { a := []int{2, 3}; result := Data.Values{a, "hello"}; a[0] = 99; return result; }
 func id<T any>(x T) T { return x; }
 func main() int {
     value := id<Data>(make()); box: any = value; copy := box.(Data);
-    p := copy.(Data.Values); values := Data[]{value, copy};
+    p := copy.(Data.Values); values := []Data{value, copy};
     match(values[1]) { Data.Values{label, items} => {
         if (label != "hello" || items[0] != 2 || p.items[1] != 3) return 99;
     } Data => return 98; }
@@ -151,14 +151,14 @@ func main() int {
     inner := nested.(Result.value); v := inner.(Result.value);
     alias := IntResult.value(3); a := alias.(IntResult.value);
     b := Result<Box<int>>.value(Box<int>{2}); item := b.(Result.value);
-    values := Result<int>[]{inner, alias};
+    values := []Result<int>{inner, alias};
     box: any = values[0]; copy := box.(Result<int>); result := copy.(Result.value);
     return v + a + item.item + result;
 }''', 13)
 
     program('''enum Result<T> { value(T), empty }
 func main() int {
-    a := int[]{2, 3}; e := Result<int[]>.value(a); a[0] = 99;
+    a := []int{2, 3}; e := Result<[]int>.value(a); a[0] = 99;
     b := e.(Result.value); b[1] = 98;
     c := e.(Result.value);
     x := Result<any>.value(4); box := x.(Result.value); n := box.(int);

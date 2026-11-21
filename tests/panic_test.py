@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix="ocean panic ") as directory:
     failure('func leaf(message string) int {\n    panic message;\n}\n'
             'func middle() int { return leaf("runtime " + "message"); }\n'
             'func main() int { return middle(); }\n', "runtime message", ["leaf", "middle", "main"])
-    failure('func recur(n int) int[] {\n    if (n == 0) panic "recursive";\n'
+    failure('func recur(n int) []int {\n    if (n == 0) panic "recursive";\n'
             '    return recur(n - 1);\n}\nfunc main() { a := recur(3); }\n',
             "recursive", ["recur"] * 4 + ["main"])
     failure('func fail<T>(value T) T {\n    panic "generic";\n}\n'
@@ -83,9 +83,9 @@ with tempfile.TemporaryDirectory(prefix="ocean panic ") as directory:
             'func (o Optional<T>) unwrap() T { if (!o.ok) return panic "empty"; return o.value; }\n'
             'func main() int {\n    o := zero(Optional<int>);\n    return o.unwrap();\n}\n',
             "empty", ["unwrap", "main"], 'return o.unwrap()', 'unwrap(')
-    failure('func make() int[] { return panic "array"; }\n'
+    failure('func make() []int { return panic "array"; }\n'
             'func main() {\n    a := make();\n}\n', "array", ["make", "main"], 'a := make()', 'make(')
-    failure('func recur(n int) int[] { if (n == 0) return panic "recursive";\n'
+    failure('func recur(n int) []int { if (n == 0) return panic "recursive";\n'
             '    return recur(n - 1);\n}\nfunc main() { a := recur(3); }\n',
             "recursive", ["recur"] * 4 + ["main"], 'return recur(n - 1)', 'recur(')
     failure('func pair() (int, bool) { return panic "pair"; }\n'

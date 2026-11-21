@@ -27,7 +27,7 @@ func target() (string, string) {
         str x0, ${architecture}
     }
     asm riscv64 { li t0, 3; sd t0, ${architecture} }
-    platforms := string[]{"unsupported", "linux", "macos", "windows"};
-    architectures := string[]{"unsupported", "x86_64", "aarch64", "riscv64"};
+    platforms := []string{"unsupported", "linux", "macos", "windows"};
+    architectures := []string{"unsupported", "x86_64", "aarch64", "riscv64"};
     return platforms[platform], architectures[architecture];
 }

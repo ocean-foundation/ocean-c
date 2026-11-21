@@ -356,6 +356,16 @@ int main(int argc, char **argv) {
         fputs("Usage: ocean clean --cache\n", stderr); return 1;
     }
     if (argc > 1 && !strcmp(argv[1], "mod")) return moduleMain(argc, argv);
+    if (argc > 1 && !strcmp(argv[1], "fix")) {
+        if (argc == 3 && !strcmp(argv[2], "--help")) {
+            puts("Usage: ocean fix [location...]\n"
+                 "Rewrites removed postfix type syntax (int[], T*, buffer<T>[N]) to prefix syntax\n"
+                 "([]int, *T, buffer<T, N>) in place. A location is a package directory, an Ocean\n"
+                 "file, or dir/... for every package below dir. Defaults to the current directory.");
+            return 0;
+        }
+        return fixPackages(argc - 2, argv + 2);
+    }
     if (argc > 1 && (!strcmp(argv[1], "build") || !strcmp(argv[1], "run"))) {
         if (argc == 3 && !strcmp(argv[2], "--help")) {
             printf("Usage: ocean build [--check | --emit-llvm | --static | -s] [-o output] [location]\n"
@@ -371,6 +381,7 @@ int main(int argc, char **argv) {
                "       ocean check [location]\n"
                "       ocean check --lsp\n"
                "       ocean mod init [name]\n"
+               "       ocean fix [location...]\n"
                "       ocean clean --cache\n"
                "       ocean -v | --version\n");
         return argc == 1 ? 1 : 0;

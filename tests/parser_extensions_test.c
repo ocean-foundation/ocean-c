@@ -121,13 +121,13 @@ int main(void) {
     e = expression("a < b > c;"); assert(e.type == EXPR_TYPE_BINARY);
     e = expression("a >> b;");
     assert(e.type == EXPR_TYPE_BINARY && ((struct expr_binary*)e.underlying)->operation == EXPR_BITSHIFT_RIGHT);
-    valid("type Dimension int[N >> 1];");
+    valid("type Dimension [N >> 1]int;");
     invalid("struct Box<> {}"); valid("struct Box<T> {}");
     invalid("struct Box<T: any> {}");
     invalid("interface Reader<T: any> {}");
     invalid("func identity<T: any>(value T) T { return value; }");
     invalid("x := func<T: any>() {};"); invalid("struct Box<T any, T any> {}");
-    invalid("struct Box<index any> {}"); invalid("struct Box<T any] {}");
+    invalid("struct Box<T any] {}");
     invalid("type Missing Box<int;"); invalid("type Extra Box<int>>;");
     invalid("type Empty Box<>;"); invalid("type Broken Box<int,,string>;");
     invalid("type Broken Box<Box<int>;");
@@ -158,13 +158,8 @@ int main(void) {
     e = expression("a[0];"); assert(e.type == EXPR_TYPE_INDEX);
     invalid("identity<int,,string>;"); invalid("identity<[]>;");
 
-    e = expression("self[];");
-    assert(e.type == EXPR_TYPE_INDEX && ((struct expr_index*)e.underlying)->index.type == EXPR_TYPE_NULL);
-    e = expression("self[].length;");
-    assert(e.type == EXPR_TYPE_DOT && ((struct expr_dot*)e.underlying)->parent.type == EXPR_TYPE_INDEX);
-    e = expression("self[][0];");
-    assert(e.type == EXPR_TYPE_INDEX && ((struct expr_index*)e.underlying)->parent.type == EXPR_TYPE_INDEX);
-    valid("struct Values { index data []int; }");
+    // x[] is the removed postfix array syntax, never an empty index.
+    invalid("self[];"); invalid("self[].length;");
     invalid("self[;"); invalid("self[,];");
 
     struct stmt_switch *sw = switchNode("func f() { switch (x := next(); x) { case 1: return; default: return; } }");
@@ -185,7 +180,7 @@ int main(void) {
     assert(sw->cases[1].nTypes == 0 && sw->cases[1].nValues == 0);
     sw = switchNode("func f(value any) { switch (value.(type)) { case string: return; } }");
     assert(sw->isTypeSwitch && sw->binding.type == EOF_TOKEN);
-    sw = switchNode("switch (prepare(); item := value.(type)) { case []int, Box<Box<int>>, pkg.Item*: use(item); default: break; }");
+    sw = switchNode("switch (prepare(); item := value.(type)) { case []int, Box<Box<int>>, *pkg.Item: use(item); default: break; }");
     assert(sw->isTypeSwitch && sw->initializer.type == STMT_EXPR && sw->cases[0].nTypes == 3);
     assert(sw->cases[0].types[1].nTokens == 7);
     e = expression("value.(Box<int>).field;"); assert(e.type == EXPR_TYPE_DOT);

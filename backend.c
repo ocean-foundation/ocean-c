@@ -58,6 +58,7 @@ typedef struct {
     Kind kind;
     const char *operand; // Backend-owned text; aggregate constants can be arbitrarily long.
     struct Scope *owner;
+    int ownedArrayElement; // Storage owns boxed fields recursively.
     int ownedBox; // A map bucket owns its box outside lexical temporary regions.
     int closureCell; // Shared capture storage, owned by the closure runtime.
     int throughPointer;
@@ -1010,18 +1011,14 @@ static Kind constraintKind(Backend *b, typeTokens span) {
     typeTokens mapKey, mapValue;
     if (mapTypeParts(span, &mapKey, &mapValue)) return type(b, span);
     typeTokens element, dimension;
-    if (bufferTypeParts(span, &element, &dimension) &&
-        span.tokens[span.nTokens - 1].type == GREATER_THAN)
+    if (bufferTypeParts(span, &element, &dimension) && !dimension.nTokens)
         return constraintShape(b, 9, constraintKind(b, element), 0);
     if (unsizedArrayTypeParts(span, &element))
         return constraintShape(b, 16, constraintKind(b, element), 0);
     Kind child;
     int shape = -1;
     size_t count = 0;
-    if (span.nTokens > 1 && span.tokens[span.nTokens - 1].type == STAR) {
-        element = (typeTokens){span.nTokens - 1, span.tokens};
-        shape = 6;
-    } else if (span.nTokens && span.tokens[0].type == STAR) {
+    if (span.nTokens && span.tokens[0].type == STAR) {
         element = (typeTokens){span.nTokens - 1, span.tokens + 1};
         shape = 6;
     } else if (arrayElementType(span, &element)) shape = 4;
@@ -1147,8 +1144,8 @@ static Kind type(Backend *b, typeTokens t) {
         return mapKind(b, key, item, key == SCALAR_ANY ? constraintKind(b, mapKey) : VOID,
                        item == SCALAR_ANY ? constraintKind(b, mapValue) : VOID);
     }
-    if (t.nTokens > 1 && t.tokens[t.nTokens - 1].type == STAR)
-        return pointerKind(b, type(b, (typeTokens){t.nTokens - 1, t.tokens}));
+    if (t.tokens[0].type == STAR)
+        return pointerKind(b, type(b, (typeTokens){t.nTokens - 1, t.tokens + 1}));
     typeTokens arrayElement;
     if (arrayElementType(t, &arrayElement)) {
         Kind element = type(b, arrayElement);
@@ -1174,7 +1171,7 @@ static Kind type(Backend *b, typeTokens t) {
         typeTokens element;
         typeTokens dimension;
         if (!bufferTypeParts(t, &element, &dimension) || bufferDimensionKind(dimension) < 0) {
-            fail(b, "expected buffer<T>[size] with a positive size, or buffer<T>[]");
+            fail(b, "expected buffer<T, size> with a positive size, or buffer<T>");
             return BAD;
         }
         Kind k = type(b, element);
@@ -1659,6 +1656,10 @@ static void clearScope(Scope *s) {
 }
 static int unsignedInteger(Backend *b, Kind k) { k = representationKind(b, k); return (k > VARUINT_BASE && k <= VARUINT_BASE + OCEAN_MAX_INTEGER_BITS) || k == UINT || k == U32 || k == U16 || k == U8; }
 static int integral(Backend *b, Kind k) { k = representationKind(b, k); return (k > VARINT_BASE && k <= VARINT_BASE + OCEAN_MAX_INTEGER_BITS) || k == INT || k == I32 || k == I16 || k == I8 || unsignedInteger(b, k); }
+static BufferKind *typedPointer(Backend *b, Kind kind) {
+    BufferKind *type = bufferKind(b, representationKind(b, kind));
+    return type && type->shape == 6 ? type : NULL;
+}
 static int floating(Backend *b, Kind k) { k = representationKind(b, k); return k == FLOAT || k == F32; }
 static int integerWidth(Backend *b, Kind k) { k = representationKind(b, k); return parameterizedIntegerWidth(k) ? parameterizedIntegerWidth(k) : (k == I8 || k == U8) ? 8 : (k == I16 || k == U16) ? 16 : (k == I32 || k == U32) ? 32 : 64; }
 static Kind promotedScalarKind(Backend *b, Kind kind) {
@@ -1831,6 +1832,7 @@ static void dropDynamicArrayPayload(Backend *, Value);
 static void escapeDynamicArrays(Backend *, Value);
 static void trackDynamicArrays(Backend *, Value);
 static void dropNestedDynamicArrays(Backend *, Value, unsigned);
+static void dropNestedArrayStorage(Backend *, Value, unsigned, int);
 static void store(Backend *b, Value address, Value v) {
     BufferKind *targetArray = bufferKind(b, address.kind), *sourceArray = bufferKind(b, v.kind);
     if (targetArray && sourceArray && targetArray->shape == 4 && sourceArray->shape == 4 &&
@@ -1845,12 +1847,24 @@ static void store(Backend *b, Value address, Value v) {
         fprintf(b->body, "  call void @__ocean.%s.check_write(ptr %s, { ptr, i64 } %s)\n",
                 address.homogeneousDynamic ? "array.dynamic" : "array", address.homogeneousArray, v.operand);
     }
-    if (address.ownedBox) {
+    if (address.ownedBox || (address.ownedArrayElement && representationKind(b, address.kind) == SCALAR_ANY)) {
         int previous = b->copyTransport; b->copyTransport = 1;
         Value replacement = copyValue(b, v, 0);
         b->copyTransport = 3; copyValue(b, load(b, address), 0);
         b->copyTransport = previous;
         rawStore(b, address, replacement); return;
+    }
+    if (address.ownedArrayElement && targetArray && v.kind == address.kind &&
+        (!targetArray->shape || targetArray->shape == 2 || targetArray->shape == 5) &&
+        ownsArrays(b, address.kind)) {
+        int previous = b->copyTransport;
+        b->copyTransport = 1;
+        Value replacement = copyValue(b, v, 0);
+        b->copyTransport = previous;
+        escapeDynamicArrays(b, replacement);
+        dropNestedArrayStorage(b, load(b, address), 0, 1);
+        rawStore(b, address, replacement);
+        return;
     }
     if (targetArray && targetArray->dynamicArray && v.kind == address.kind) {
         Value replacement = copyValue(b, v, 0);
@@ -1863,14 +1877,14 @@ static void store(Backend *b, Value address, Value v) {
         // A string/reference value stored through *T may change size. Its new
         // backing must outlive this frame, including when T lives on the heap.
         int previous = b->copyTransport;
-        if (address.throughPointer || address.owner == b->globalScope) b->copyTransport = 1;
+        if (address.ownedArrayElement || address.throughPointer || address.owner == b->globalScope) b->copyTransport = 1;
         else if (address.owner)
             for (Scope *scope = b->scope; scope && scope != address.owner; scope = scope->parent)
                 scope->retainAllocations = 1;
         Value replacement = copyValue(b, v, 0);
         b->copyTransport = previous;
         escapeDynamicArrays(b, replacement);
-        dropNestedDynamicArrays(b, load(b, address), 0);
+        dropNestedArrayStorage(b, load(b, address), 0, address.ownedArrayElement);
         rawStore(b, address, replacement);
         return;
     }
@@ -1987,6 +2001,8 @@ static Value trackBox(Backend *b, Value box) {
 }
 static Value boxScalar(Backend *b, Value v, int promote) {
     if (v.kind == SCALAR_ANY) return v;
+    // Box and register explicit null using the same raw-pointer representation.
+    if (v.kind == NULL_VALUE) v = value(b, RAW_POINTER, "@__ocean.null");
     // Mode 2 boxes private enum storage, which cannot itself escape to a
     // reflection call. Ordinary boxing of a payload still registers its type.
     if (promote != 2) reflectionInput(b, v.kind);
@@ -1994,9 +2010,8 @@ static Value boxScalar(Backend *b, Value v, int promote) {
     // Preserve Ocean identity while keeping small scalars ready for C varargs.
     Kind promoted = promotedScalarKind(b, v.kind);
     if (promoted != v.kind) v = convert(b, v, promoted);
-    if (v.kind == NULL_VALUE) v = value(b, RAW_POINTER, "@__ocean.null");
     BufferKind *t = bufferKind(b, v.kind);
-    Value metadata = anyMetadata(b, identity == NULL_VALUE ? RAW_POINTER : identity);
+    Value metadata = anyMetadata(b, identity);
     if (wideInteger(b, v.kind) || (t && (t->shape == 2 || t->shape == 4 || t->shape == 5 || t->shape == 17 || !t->shape || (t->definition && representationKind(b, t->kind) == SCALAR_ANY)))) {
         Value address = slot(b, v.kind), result = temp(b, SCALAR_ANY);
         rawStore(b, address, v);
@@ -2367,16 +2382,16 @@ static Kind expressionKind(Backend *b, expr *e) {
     case EXPR_TYPE_INSTANTIATION: return specializedClosureValue(b, e, 1).kind;
     case EXPR_TYPE_FUNCTION: return closureKind(b, e->underlying);
     case EXPR_TYPE_LITERAL: {
-        enum literalType t = ((struct expr_literal *)e->underlying)->type;
-        if (t == LITERAL_TYPE_NULL) return NULL_VALUE;
         struct expr_literal *literal = e->underlying;
-        if (t == LITERAL_TYPE_INT && literal->wideInteger) {
+        if (literal->type == LITERAL_TYPE_NULL) return NULL_VALUE;
+        if (literal->type == LITERAL_TYPE_INT && literal->wideInteger) {
             unsigned width = literal->integerBits + (literal->negativeWide && !literal->integerPowerOfTwo);
             if (width == 64) return literal->negativeWide ? INT : UINT;
             return (Kind)((literal->negativeWide ? VARINT_BASE : VARUINT_BASE) + width);
         }
-        if (t == LITERAL_TYPE_INT && ((struct expr_literal *)e->underlying)->unsignedLiteral) return UINT;
-        return t == LITERAL_TYPE_STRING ? stringKind(b) : t == LITERAL_TYPE_FLOAT ? FLOAT : INT;
+        if (literal->type == LITERAL_TYPE_INT && literal->unsignedLiteral) return UINT;
+        if (literal->type == LITERAL_TYPE_FLOAT) return literal->singlePrecision ? F32 : FLOAT;
+        return literal->type == LITERAL_TYPE_STRING ? stringKind(b) : INT;
     }
     case EXPR_TYPE_COMPOSITE: {
         struct expr_composite *v = e->underlying;
@@ -2495,6 +2510,8 @@ static Kind expressionKind(Backend *b, expr *e) {
         }
         if (v->operation == EXPR_ASSIGNMENT || v->operation >= EXPR_ADD_EQUALS)
             return a;
+        if (v->operation == EXPR_ADD && integral(b, a) && typedPointer(b, c)) return c;
+        if (v->operation == EXPR_SUBTRACT && typedPointer(b, a) && a == c) return INT;
         if (a == SCALAR_ANY || c == SCALAR_ANY)
             return v->checkedResult.nTokens ? type(b, v->checkedResult) : SCALAR_ANY;
         return a == FLOAT || c == FLOAT ? FLOAT : a == F32 || c == F32 ? F32
@@ -2658,9 +2675,18 @@ static void releaseScopeValues(Backend *b) {
                 rawStore(b, binding->address, emptyValue(b, binding->address.kind));
             }
 }
-static void dropNestedDynamicArrays(Backend *b, Value item, unsigned depth) {
+static void dropNestedArrayStorage(Backend *b, Value item, unsigned depth, int ownedBoxes) {
     if (b->errors) return;
     if (depth >= 32) { fail(b, "nested dynamic array ownership is too deep"); return; }
+    // Array-owned heap copies have unregistered boxes; lexical copies use
+    // separate box cleanup slots and must not be destroyed a second time here.
+    if (representationKind(b, item.kind) == SCALAR_ANY) {
+        if (ownedBoxes) {
+            int previous = b->copyTransport; b->copyTransport = 3;
+            copyValue(b, item, depth); b->copyTransport = previous;
+        }
+        return;
+    }
     BufferKind *t = bufferKind(b, item.kind);
     if (!t) return;
     if (t->mapEntry) {
@@ -2691,7 +2717,7 @@ static void dropNestedDynamicArrays(Backend *b, Value item, unsigned depth) {
             Value i = load(b, cursor), more = temp(b, BOOL);
             fprintf(b->body, "  %s = icmp slt i64 %s, %s\n", more.operand, i.operand, count.operand);
             branch(b, more, body, done); label(b, body);
-            dropNestedDynamicArrays(b, load(b, elementAddress(b, item, i)), depth + 1);
+            dropNestedArrayStorage(b, load(b, elementAddress(b, item, i)), depth + 1, ownedBoxes);
             Value next = temp(b, INT); fprintf(b->body, "  %s = add i64 %s, 1\n", next.operand, i.operand);
             rawStore(b, cursor, next); jump(b, condition); label(b, done);
         }
@@ -2699,7 +2725,10 @@ static void dropNestedDynamicArrays(Backend *b, Value item, unsigned depth) {
         return;
     }
     if (!t->shape || t->shape == 2 || t->shape == 5)
-        for (size_t i = 0; i < t->count; i++) dropNestedDynamicArrays(b, extract(b, item, i), depth + 1);
+        for (size_t i = 0; i < t->count; i++) dropNestedArrayStorage(b, extract(b, item, i), depth + 1, ownedBoxes);
+}
+static void dropNestedDynamicArrays(Backend *b, Value item, unsigned depth) {
+    dropNestedArrayStorage(b, item, depth, 0);
 }
 static void dropDynamicArrayPayload(Backend *b, Value dynamicArray) {
     b->returnTransportUsed = 1;
@@ -2718,10 +2747,7 @@ static void dropDynamicArrayPayload(Backend *b, Value dynamicArray) {
         fprintf(b->body, "  %s = icmp slt i64 %s, %s\n", more.operand, i.operand, count.operand);
         branch(b, more, body, done); label(b, body);
         Value item = load(b, elementAddress(b, dynamicArray, i));
-        if (representationKind(b, type->element) == SCALAR_ANY) {
-            int previous = b->copyTransport; b->copyTransport = 3;
-            copyValue(b, item, 0); b->copyTransport = previous;
-        } else dropNestedDynamicArrays(b, item, 0);
+        dropNestedArrayStorage(b, item, 0, 1);
         Value next = temp(b, INT); fprintf(b->body, "  %s = add i64 %s, 1\n", next.operand, i.operand);
         rawStore(b, cursor, next); jump(b, condition); label(b, done);
     }
@@ -2756,6 +2782,7 @@ static Value arrayHeaderSize(Backend *b, Kind kind) {
 static Value elementAddress(Backend *b, Value array, Value index) {
     BufferKind *t = bufferKind(b, array.kind);
     Value data = arrayData(b, array), result = temp(b, t->element);
+    result.ownedArrayElement = t->dynamicArray || (t->shape != 3 && array.ownedArrayElement);
     result.ownedBox = t->dynamicArray && t->element == SCALAR_ANY;
     result.owner = array.owner;
     result.throughPointer = array.throughPointer;
@@ -3212,14 +3239,54 @@ static ValueList tryIndexValues(Backend *b, struct expr_index *v) {
     trackDynamicArrays(b, items[0]);
     return (ValueList){items, 2};
 }
+static Kind constraintShape(Backend *, int, Kind, size_t);
+static Kind constraintKind(Backend *, typeTokens);
+static Value unboxArrayView(Backend *, Value, Kind);
+static Value unboxMatched(Backend *, Value, Kind);
+/* value, ok := box.(T) yields T's zero value and false instead of trapping. */
+static ValueList tryAssertValues(Backend *b, struct expr_assertion *v) {
+    Kind kind = type(b, v->type);
+    Value box = expression(b, &v->child), matches;
+    BufferKind *array = bufferKind(b, kind);
+    int arrayView = array && !array->definition && array->shape == 4 &&
+                    (array->fixedArray || array->element == SCALAR_ANY);
+    if (arrayView) {
+        // Fixed targets match fixed-array families; dynamic any[] matches like `case any[]:`.
+        Kind pattern = array->fixedArray ? constraintShape(b, 16, array->element, 0) : constraintKind(b, v->type);
+        matches = testConstraint(b, box, pattern, 0);
+    } else {
+        Value metadata = anyMetadata(b, kind), tag = temp(b, RAW_POINTER);
+        matches = temp(b, BOOL);
+        fprintf(b->body, "  %s = extractvalue { ptr, i64 } %s, 0\n", tag.operand, box.operand);
+        fprintf(b->body, "  %s = icmp eq ptr %s, %s\n", matches.operand, tag.operand, metadata.operand);
+    }
+    Value result = slot(b, kind);
+    rawStore(b, result, emptyValue(b, kind));
+    unsigned yes = ++b->label, end = ++b->label;
+    branch(b, matches, yes, end); label(b, yes);
+    Value unboxed = arrayView && array->element == SCALAR_ANY ? unboxArrayView(b, box, kind) : unboxMatched(b, box, kind);
+    rawStore(b, result, unboxed);
+    jump(b, end); label(b, end);
+    Value *items = checked(2 * sizeof(*items));
+    items[0] = load(b, result); items[1] = matches;
+    rawStore(b, result, emptyValue(b, kind));
+    trackDynamicArrays(b, items[0]);
+    return (ValueList){items, 2};
+}
 static ValueList evaluateValues(Backend *b, expr *items, size_t count, Kind *expected,
-                                size_t nExpected, int snapshot) {
+                                size_t nExpected, int snapshot, int declaration) {
     if (count == 1 && items[0].type == EXPR_TYPE_INDEX &&
         ((struct expr_index *)items[0].underlying)->tryIndex)
         return tryIndexValues(b, items[0].underlying);
+    if (count == 1 && items[0].type == EXPR_TYPE_ASSERTION &&
+        ((struct expr_assertion *)items[0].underlying)->tryAssert)
+        return tryAssertValues(b, items[0].underlying);
     ValueList result = {.items = checked(sizeof(Value) * (count + 1)), .count = count};
     for (size_t i = 0; i < count; i++) {
-        Value v = expectedValue(b, &items[i], i < nExpected ? expected[i] : BAD);
+        Kind target = i < nExpected ? expected[i] : BAD;
+        Value v = declaration && typedPointer(b, target) && integral(b, expressionKind(b, &items[i]))
+            ? convert(b, expression(b, &items[i]), target)
+            : expectedValue(b, &items[i], target);
         BufferKind *t = bufferKind(b, v.kind);
         if (t && t->shape == 2) {
             if (count != 1) {
@@ -3568,6 +3635,14 @@ static Value materialize(Backend *b, expr *e) {
 static int pureIndex(expr *e) {
     if (!e || !e->underlying) return 1;
     if (e->type == EXPR_TYPE_IDENTIFIER || e->type == EXPR_TYPE_LITERAL) return 1;
+    if (e->type == EXPR_TYPE_DOT) {
+        struct expr_dot *v = e->underlying;
+        return pureIndex(&v->parent);
+    }
+    if (e->type == EXPR_TYPE_INDEX) {
+        struct expr_index *v = e->underlying;
+        return pureIndex(&v->parent) && pureIndex(&v->index);
+    }
     if (e->type == EXPR_TYPE_BINARY) {
         struct expr_binary *v = e->underlying;
         return v->operation < EXPR_ADD_EQUALS && pureIndex(&v->left) && pureIndex(&v->right);
@@ -3610,6 +3685,7 @@ static Value address(Backend *b, expr *e) {
             size_t i = recordField(t, name);
             if (i < t->count) {
                 Value result = temp(b, t->members[i]);
+                result.ownedArrayElement = base.ownedArrayElement;
                 result.owner = base.owner;
                 result.throughPointer = base.throughPointer;
                 if (t->fieldIndices) {
@@ -3660,6 +3736,7 @@ static Value address(Backend *b, expr *e) {
         }
         index = convert(b, index, INT);
         Value result = temp(b, t->element);
+        result.ownedArrayElement = t->dynamicArray || (t->shape != 3 && base.ownedArrayElement);
         result.ownedBox = t->dynamicArray && t->element == SCALAR_ANY;
         result.owner = base.owner;
         result.throughPointer = base.throughPointer;
@@ -3710,23 +3787,126 @@ static Value removeDynamicArray(Backend *b, struct expr_dot *dot, struct expr_ca
     Value removed = copyValue(b, load(b, elementAddress(b, source, index)), 0);
     Value newLength = temp(b, INT);
     fprintf(b->body, "  %s = sub i64 %s, 1\n", newLength.operand, length.operand);
-    Value result = allocateCollection(b, source.kind, newLength), cursor = slot(b, INT);
-    rawStore(b, cursor, value(b, INT, "0"));
-    unsigned condition = ++b->label, body = ++b->label, end = ++b->label;
-    jump(b, condition); label(b, condition);
-    Value i = load(b, cursor), more = temp(b, BOOL);
-    fprintf(b->body, "  %s = icmp ult i64 %s, %s\n", more.operand, i.operand, newLength.operand);
-    branch(b, more, body, end); label(b, body);
-    Value after = temp(b, BOOL), shifted = temp(b, INT), from = temp(b, INT);
-    fprintf(b->body, "  %s = icmp uge i64 %s, %s\n", after.operand, i.operand, index.operand);
-    fprintf(b->body, "  %s = add i64 %s, 1\n", shifted.operand, i.operand);
-    fprintf(b->body, "  %s = select i1 %s, i64 %s, i64 %s\n", from.operand, after.operand, shifted.operand, i.operand);
-    store(b, elementAddress(b, result, i), load(b, elementAddress(b, source, from)));
-    rawStore(b, cursor, shifted); jump(b, condition); label(b, end);
-    if (snapshot) dropDynamicArrayPayload(b, source);
-    escapeDynamicArrays(b, result);
-    dropDynamicArrayPayload(b, load(b, binding)); rawStore(b, binding, result);
+    // Release only the removed element; surviving elements transfer ownership
+    // within the same payload. The returned value is already an independent copy.
+    Value oldItem = load(b, elementAddress(b, source, index));
+    dropNestedArrayStorage(b, oldItem, 0, 1);
+    Value next = temp(b, INT), remaining = temp(b, INT), bytes = temp(b, INT);
+    BufferKind *t = bufferKind(b, source.kind);
+    Value stride = storageSize(b, t->element);
+    fprintf(b->body, "  %s = add i64 %s, 1\n", next.operand, index.operand);
+    fprintf(b->body, "  %s = sub i64 %s, %s\n", remaining.operand, newLength.operand, index.operand);
+    fprintf(b->body, "  %s = mul i64 %s, %s\n", bytes.operand, remaining.operand, stride.operand);
+    Value destination = elementAddress(b, source, index), from = elementAddress(b, source, next);
+    fprintf(b->body, "  call void @llvm.memmove.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)\n",
+            destination.operand, from.operand, bytes.operand);
+    b->dataCopyUsed = 1;
+    rawStore(b, elementAddress(b, source, newLength), emptyValue(b, t->element));
+    rawStore(b, value(b, INT, "%s", source.operand), newLength);
+    escapeDynamicArrays(b, source);
+    if (snapshot) dropDynamicArrayPayload(b, load(b, binding));
+    rawStore(b, binding, source);
     return removed;
+}
+static Value insertDynamicArrayValues(Backend *b, Value binding, Value source, int snapshot,
+                                      Value index, Value *items, size_t explicitCount,
+                                      Value tail, Value tailLength, int spread, int shift) {
+    BufferKind *t = bufferKind(b, source.kind);
+    Value oldLength = arrayLength(b, source);
+    Value added = temp(b, INT), length = temp(b, INT);
+    fprintf(b->body, "  %s = add i64 %zu, %s\n", added.operand, explicitCount, tailLength.operand);
+    fprintf(b->body, "  %s = add i64 %s, %s\n", length.operand, oldLength.operand, added.operand);
+    // Own RHS values before moving storage: an argument/spread may alias source.
+    int previousTransport = b->copyTransport;
+    b->copyTransport = 1; // New elements belong to the array, not temporary box slots.
+    for (size_t j = 0; j < explicitCount; j++)
+        items[j] = copyValue(b, coerce(b, items[j], t->element), 0);
+    b->copyTransport = previousTransport;
+    if (spread) tail = collectionCopy(b, tail, source.kind);
+    Value holder = slot(b, source.kind);
+    rawStore(b, holder, source);
+    Value zero = emptyValue(b, source.kind), empty = temp(b, BOOL);
+    fprintf(b->body, "  %s = icmp eq ptr %s, %s\n", empty.operand, source.operand, zero.operand);
+    unsigned create = ++b->label, ready = ++b->label;
+    branch(b, empty, create, ready); label(b, create);
+    rawStore(b, holder, allocateCollection(b, source.kind, value(b, INT, "0")));
+    jump(b, ready); label(b, ready);
+    Value result = load(b, holder), cap = temp(b, INT), dataField = temp(b, RAW_POINTER);
+    fprintf(b->body, "  %s = getelementptr { i64, i64, ptr }, ptr %s, i32 0, i32 1\n", cap.operand, result.operand);
+    fprintf(b->body, "  %s = getelementptr { i64, i64, ptr }, ptr %s, i32 0, i32 2\n", dataField.operand, result.operand);
+    Value capacity = load(b, cap), grow = temp(b, BOOL);
+    fprintf(b->body, "  %s = icmp ugt i64 %s, %s\n", grow.operand, length.operand, capacity.operand);
+    unsigned resize = ++b->label, filled = ++b->label;
+    branch(b, grow, resize, filled); label(b, resize);
+    Value doubled = temp(b, INT), small = temp(b, BOOL), minimum = temp(b, INT);
+    Value fits = temp(b, BOOL), nextCapacity = temp(b, INT);
+    fprintf(b->body, "  %s = mul i64 %s, 2\n", doubled.operand, capacity.operand);
+    fprintf(b->body, "  %s = icmp ult i64 %s, 8\n", small.operand, doubled.operand);
+    fprintf(b->body, "  %s = select i1 %s, i64 8, i64 %s\n", minimum.operand, small.operand, doubled.operand);
+    fprintf(b->body, "  %s = icmp uge i64 %s, %s\n", fits.operand, minimum.operand, length.operand);
+    fprintf(b->body, "  %s = select i1 %s, i64 %s, i64 %s\n", nextCapacity.operand, fits.operand, minimum.operand, length.operand);
+    Value stride = storageSize(b, t->element), bytes = temp(b, INT), data = temp(b, RAW_POINTER);
+    fprintf(b->body, "  %s = mul i64 %s, %s\n", bytes.operand, nextCapacity.operand, stride.operand);
+    fprintf(b->body, "  %s = call ptr %s(i64 %s)\n", data.operand, libcSymbol(b, "malloc"), bytes.operand);
+    Value present = temp(b, BOOL);
+    fprintf(b->body, "  %s = icmp ne ptr %s, null\n", present.operand, data.operand);
+    unsigned allocated = ++b->label, failed = ++b->label;
+    branch(b, present, allocated, failed); label(b, failed);
+    fputs("  call void @llvm.trap()\n  unreachable\n", b->body);
+    b->nullChecksUsed = 1; b->terminated = 1; label(b, allocated);
+    Value oldData = arrayData(b, result), oldBytes = temp(b, INT);
+    fprintf(b->body, "  %s = mul i64 %s, %s\n", oldBytes.operand, oldLength.operand, stride.operand);
+    fprintf(b->body, "  call void @llvm.memmove.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)\n", data.operand, oldData.operand, oldBytes.operand);
+    fprintf(b->body, "  call void %s(ptr %s)\n", libcSymbol(b, "free"), oldData.operand);
+    b->dataCopyUsed = 1;
+    rawStore(b, dataField, data); rawStore(b, cap, nextCapacity);
+    jump(b, filled); label(b, filled);
+    rawStore(b, value(b, INT, "%s", result.operand), length);
+    if (shift) {
+        Value remaining = temp(b, INT), shifted = temp(b, INT), bytes = temp(b, INT);
+        Value stride = storageSize(b, t->element);
+        fprintf(b->body, "  %s = sub i64 %s, %s\n", remaining.operand, oldLength.operand, index.operand);
+        fprintf(b->body, "  %s = add i64 %s, %s\n", shifted.operand, index.operand, added.operand);
+        fprintf(b->body, "  %s = mul i64 %s, %s\n", bytes.operand, remaining.operand, stride.operand);
+        Value from = elementAddress(b, result, index), to = elementAddress(b, result, shifted);
+        fprintf(b->body, "  call void @llvm.memmove.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)\n",
+                to.operand, from.operand, bytes.operand);
+        b->dataCopyUsed = 1;
+    }
+    // Only live elements are initialized; spare capacity owns no values.
+    for (size_t j = 0; j < explicitCount; j++) {
+        Value at = temp(b, INT);
+        fprintf(b->body, "  %s = add i64 %s, %zu\n", at.operand, index.operand, j);
+        Value destination = elementAddress(b, result, at);
+        escapeDynamicArrays(b, items[j]); rawStore(b, destination, items[j]);
+    }
+    if (spread) {
+        Value cursor = slot(b, INT); rawStore(b, cursor, value(b, INT, "0"));
+        unsigned check = ++b->label, body = ++b->label, done = ++b->label;
+        jump(b, check); label(b, check);
+        Value i = load(b, cursor), more = temp(b, BOOL);
+        fprintf(b->body, "  %s = icmp slt i64 %s, %s\n", more.operand, i.operand, tailLength.operand);
+        branch(b, more, body, done); label(b, body);
+        Value offset = temp(b, INT), at = temp(b, INT);
+        fprintf(b->body, "  %s = add i64 %s, %zu\n", offset.operand, index.operand, explicitCount);
+        fprintf(b->body, "  %s = add i64 %s, %s\n", at.operand, offset.operand, i.operand);
+        Value destination = elementAddress(b, result, at);
+        rawStore(b, destination, emptyValue(b, t->element));
+        store(b, destination, load(b, elementAddress(b, tail, i)));
+        Value next = temp(b, INT); fprintf(b->body, "  %s = add i64 %s, 1\n", next.operand, i.operand);
+        rawStore(b, cursor, next); jump(b, check); label(b, done);
+        dropDynamicArrayPayload(b, tail);
+    }
+    checkArrayRequirement(b, result, t->requirement);
+    if (t->element == SCALAR_ANY && !t->count) {
+        b->homogeneousUsed = 1;
+        fprintf(b->body, "  call void @__ocean.array.dynamic.check(ptr %s)\n", result.operand);
+    }
+    free(items);
+    escapeDynamicArrays(b, result);
+    if (snapshot) dropDynamicArrayPayload(b, load(b, binding));
+    rawStore(b, binding, result);
+    return result;
 }
 static Value mutateDynamicArray(Backend *b, struct expr_dot *dot, struct expr_call *call) {
     const char *name = ((struct expr_identifier *)dot->field.underlying)->lexeme.lexeme;
@@ -3751,52 +3931,11 @@ static Value mutateDynamicArray(Backend *b, struct expr_dot *dot, struct expr_ca
     for (size_t i = 0; i < explicitCount; i++) items[i] = expectedValue(b, &call->params[first + i], t->element);
     Value tail = value(b, BAD, ""), tailLength = value(b, INT, "0");
     if (call->spread) { tail = expression(b, &call->params[call->nParams - 1]); tailLength = arrayLength(b, tail); }
-    Value added = temp(b, INT), length = temp(b, INT);
-    fprintf(b->body, "  %s = add i64 %zu, %s\n", added.operand, explicitCount, tailLength.operand);
-    fprintf(b->body, "  %s = add i64 %s, %s\n", length.operand, oldLength.operand, added.operand);
-    Value result = allocateCollection(b, source.kind, length), cursor = slot(b, INT);
-    rawStore(b, cursor, value(b, INT, "0"));
-    unsigned condition = ++b->label, body = ++b->label, end = ++b->label;
-    jump(b, condition); label(b, condition);
-    Value i = load(b, cursor), more = temp(b, BOOL);
-    fprintf(b->body, "  %s = icmp slt i64 %s, %s\n", more.operand, i.operand, oldLength.operand);
-    branch(b, more, body, end); label(b, body);
-    Value after = temp(b, BOOL), shifted = temp(b, INT), destination = temp(b, INT);
-    fprintf(b->body, "  %s = icmp sge i64 %s, %s\n", after.operand, i.operand, index.operand);
-    fprintf(b->body, "  %s = add i64 %s, %s\n", shifted.operand, i.operand, added.operand);
-    fprintf(b->body, "  %s = select i1 %s, i64 %s, i64 %s\n", destination.operand, after.operand, shifted.operand, i.operand);
-    store(b, elementAddress(b, result, destination), load(b, elementAddress(b, source, i)));
-    Value next = temp(b, INT); fprintf(b->body, "  %s = add i64 %s, 1\n", next.operand, i.operand);
-    rawStore(b, cursor, next); jump(b, condition); label(b, end);
-    for (size_t j = 0; j < explicitCount; j++) {
-        Value at = temp(b, INT); fprintf(b->body, "  %s = add i64 %s, %zu\n", at.operand, index.operand, j);
-        store(b, elementAddress(b, result, at), items[j]);
-    }
-    if (call->spread) {
-        rawStore(b, cursor, value(b, INT, "0"));
-        condition = ++b->label; body = ++b->label; end = ++b->label;
-        jump(b, condition); label(b, condition);
-        i = load(b, cursor); more = temp(b, BOOL);
-        fprintf(b->body, "  %s = icmp slt i64 %s, %s\n", more.operand, i.operand, tailLength.operand);
-        branch(b, more, body, end); label(b, body);
-        Value offset = temp(b, INT), at = temp(b, INT);
-        fprintf(b->body, "  %s = add i64 %s, %zu\n", offset.operand, index.operand, explicitCount);
-        fprintf(b->body, "  %s = add i64 %s, %s\n", at.operand, offset.operand, i.operand);
-        store(b, elementAddress(b, result, at), load(b, elementAddress(b, tail, i)));
-        next = temp(b, INT); fprintf(b->body, "  %s = add i64 %s, 1\n", next.operand, i.operand);
-        rawStore(b, cursor, next); jump(b, condition); label(b, end);
-    }
-    checkArrayRequirement(b, result, t->requirement);
-    if (t->element == SCALAR_ANY && !t->count) {
-        b->homogeneousUsed = 1;
-        fprintf(b->body, "  call void @__ocean.array.dynamic.check(ptr %s)\n", result.operand);
-    }
-    free(items);
-    if (snapshot) dropDynamicArrayPayload(b, source);
-    escapeDynamicArrays(b, result);
-    dropDynamicArrayPayload(b, load(b, binding)); rawStore(b, binding, result);
+    insertDynamicArrayValues(b, binding, source, snapshot, index, items, explicitCount,
+                             tail, tailLength, call->spread, strcmp(name, "append") != 0);
     return value(b, VOID, "");
 }
+
 static Value addArrayValues(Backend *b, Value left, Value right, Kind resultKind) {
     BufferKind *resultType = bufferKind(b, resultKind);
     if (!resultType->shape && resultType->fixedArray) {
@@ -4060,6 +4199,27 @@ static Value binary(Backend *b, enum binaryExprType op, Value a, Value c) {
         if (a.kind == NULL_VALUE) a = coerce(b, a, c.kind);
         else c = coerce(b, c, a.kind);
     }
+    if (op == EXPR_ADD && integral(b, a.kind) && typedPointer(b, c.kind))
+        return binary(b, op, c, a);
+    BufferKind *pointer = typedPointer(b, a.kind);
+    if (pointer && (op == EXPR_ADD || op == EXPR_SUBTRACT)) {
+        const char *pointee = irType(b, pointer->element);
+        requirePointer(b, a);
+        if (op == EXPR_SUBTRACT && a.kind == c.kind) {
+            requirePointer(b, c);
+            Value left = convert(b, a, INT), right = convert(b, c, INT);
+            Value distance = binary(b, EXPR_SUBTRACT, left, right);
+            Value stride = value(b, INT, "ptrtoint (ptr getelementptr (%s, ptr null, i64 1) to i64)", pointee);
+            return binary(b, EXPR_DIVIDE, distance, stride);
+        }
+        Value offset = convert(b, c, INT);
+        if (op == EXPR_SUBTRACT)
+            offset = binary(b, EXPR_SUBTRACT, value(b, INT, "0"), offset);
+        Value result = temp(b, a.kind);
+        fprintf(b->body, "  %s = getelementptr %s, ptr %s, i64 %s\n", result.operand, pointee,
+                a.operand, offset.operand);
+        return result;
+    }
     if (op == EXPR_EQUALITY || op == EXPR_NOT_EQUALS) {
         if (implicitVoidPointer(b, c.kind, a.kind)) c = coerce(b, c, a.kind);
         else if (implicitVoidPointer(b, a.kind, c.kind)) a = coerce(b, a, c.kind);
@@ -4307,7 +4467,7 @@ static Value expressionImpl(Backend *b, expr *e) {
                 double d;
                 unsigned long long bits;
             } f = {.d = *(double *)v->value};
-            return value(b, FLOAT, "0x%016llX", f.bits);
+            return value(b, v->singlePrecision ? F32 : FLOAT, "0x%016llX", f.bits);
         }
         if (v->type == LITERAL_TYPE_STRING) {
             Value result = allocateCollection(b, stringKind(b), value(b, INT, "%zu", v->stringLength));
@@ -4725,7 +4885,7 @@ static Value expressionImpl(Backend *b, expr *e) {
             if (v->spread && i + 1 == v->nParams)
                 expected[i] = BAD;
         }
-        ValueList evaluated = evaluateValues(b, v->params, v->nParams, expected, v->nParams, 1);
+        ValueList evaluated = evaluateValues(b, v->params, v->nParams, expected, v->nParams, 1, 0);
         free(expected);
         if ((!f->isVariadic && evaluated.count != fixed) || evaluated.count < fixed ||
             (v->spread && (!f->isVariadic || evaluated.count < f->nParams + (f->isExtern ? 1 : 0) ||
@@ -4948,7 +5108,7 @@ static Value expressionImpl(Backend *b, expr *e) {
             }
             for (size_t i = 0; i < m; i++)
                 rhs[i] = *commaItem(&v->right, i);
-            ValueList values = evaluateValues(b, rhs, m, expected, n, 1);
+            ValueList values = evaluateValues(b, rhs, m, expected, n, 1, 0);
             if (values.count != n)
                 fail(b, "assignment count mismatch");
             for (size_t i = 0; i < n && i < values.count; i++)
@@ -4967,8 +5127,23 @@ static Value expressionImpl(Backend *b, expr *e) {
                 old = load(b, addr);
             BufferKind *target = bufferKind(b, addr.kind);
             int arrayAdd = v->operation == EXPR_ADD_EQUALS && target && (target->shape == 4 || target->fixedArray);
+            if (arrayAdd && target->dynamicArray && !target->immutableString &&
+                arrayAdditionKind(b, old.kind, expressionKind(b, &v->right)) != BAD) {
+                int snapshot = !pureIndex(&v->right);
+                if (snapshot) old = copyValue(b, old, 0);
+                Value index = arrayLength(b, old), rhs = expression(b, &v->right);
+                BufferKind *rhsType = bufferKind(b, rhs.kind);
+                int spread = rhsType && (rhsType->shape == 4 || rhsType->fixedArray) &&
+                             rhs.kind != target->element;
+                Value *items = checked(sizeof(Value));
+                if (!spread) items[0] = rhs;
+                return insertDynamicArrayValues(b, addr, old, snapshot, index, items, !spread,
+                                               rhs, spread ? arrayLength(b, rhs) : value(b, INT, "0"), spread, 0);
+            }
             if (arrayAdd) old = copyValue(b, old, 0);
-            Value r = arrayAdd ? expression(b, &v->right) : expectedValue(b, &v->right, addr.kind);
+            int pointerUpdate = typedPointer(b, addr.kind) && v->operation != EXPR_ASSIGNMENT;
+            Value r = arrayAdd || pointerUpdate ? expression(b, &v->right)
+                                                : expectedValue(b, &v->right, addr.kind);
             if (v->operation != EXPR_ASSIGNMENT) {
                 enum binaryExprType ops[] = {
                     EXPR_ADD,         EXPR_SUBTRACT,  EXPR_MULTIPLY,      EXPR_DIVIDE,
@@ -5043,7 +5218,9 @@ static Value expressionImpl(Backend *b, expr *e) {
                 Value updated = boxedUnary(b,v->operation,old,v->operandTypes); store(b,addr,updated);
                 return v->operation == UNARY_POSTFIX_INCREMENT || v->operation == UNARY_POSTFIX_DECREMENT ? old : updated;
             }
-            Value one = floating(b, old.kind) ? value(b, old.kind, "0x3FF0000000000000") : value(b, old.kind, "1");
+            Value one = typedPointer(b, old.kind) ? value(b, INT, "1")
+                : floating(b, old.kind) ? value(b, old.kind, "0x3FF0000000000000")
+                                        : value(b, old.kind, "1");
             Value r = binary(b, decrement ? EXPR_SUBTRACT : EXPR_ADD, old, one);
             store(b, addr, r);
             return v->operation == UNARY_POSTFIX_INCREMENT ||
@@ -5545,7 +5722,7 @@ static void statementImpl(Backend *b, stmt *s) {
         Kind *expected = checked(sizeof(Kind) * v->nVars);
         for (size_t i = 0; i < v->nVars; i++)
             expected[i] = v->type.nTokens ? type(b, v->type) : BAD;
-        ValueList values = evaluateValues(b, v->initValues, v->nInitValues, expected, v->nVars, 1);
+        ValueList values = evaluateValues(b, v->initValues, v->nInitValues, expected, v->nVars, 1, 1);
         free(expected);
         if (v->nInitValues && values.count != v->nVars) {
             fail(b, "initializer count mismatch");
@@ -5601,7 +5778,7 @@ static void statementImpl(Backend *b, stmt *s) {
         for (size_t i = 0; i < b->function->nResults; i++)
             expected[i] = type(b, b->function->resultTypes[i]);
         ValueList values =
-            evaluateValues(b, v->values, v->nValues, expected, b->function->nResults, v->nValues > 1);
+            evaluateValues(b, v->values, v->nValues, expected, b->function->nResults, v->nValues > 1, 0);
         Value r = value(b, VOID, "");
         if (b->function->nResults > 1) {
             r = value(b, k, "zeroinitializer");
@@ -6397,7 +6574,7 @@ static void emitGlobals(Backend *b, FILE *output) {
             Kind *expected = checked(sizeof(Kind) * v->nVars);
             for (size_t j = 0; j < v->nVars; j++)
                 expected[j] = v->vars[j].type == UNDERSCORE ? BAD : find(b, v->vars[j].lexeme).kind;
-            ValueList values = evaluateValues(b, v->initValues, v->nInitValues, expected, v->nVars, 1);
+            ValueList values = evaluateValues(b, v->initValues, v->nInitValues, expected, v->nVars, 1, 1);
             for (size_t j = 0; j < v->nVars && j < values.count; j++)
                 if (v->vars[j].type != UNDERSCORE) store(b, find(b, v->vars[j].lexeme), values.items[j]);
             free(expected); free(values.items);

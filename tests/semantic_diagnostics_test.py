@@ -44,6 +44,9 @@ with tempfile.TemporaryDirectory(prefix="ocean semantic diagnostics ") as direct
                         f"{'at least ' if minimum else ''}{expected} {noun}, but got {actual}.",
                         marker, focus)
 
+    # byte and rune are ordinary identifiers, not built-in types.
+    diagnostic_case("func main() {\n    b: byte = 1;\n}", "unresolved type: byte", "b: byte", "byte")
+    diagnostic_case("func main() {\n    r: rune = 1;\n}", "unresolved type: rune", "r: rune", "rune")
     count_case("func take(x int) {}\nfunc main() {\n    take();\n}",
                "argument", 1, 0, "take();", "take")
     count_case("func take() {}\nfunc main() {\n    take(1, 2);\n}",
@@ -82,10 +85,10 @@ with tempfile.TemporaryDirectory(prefix="ocean semantic diagnostics ") as direct
              "func (n *Node<T>) length() int {\n"
              "\tif (n.value == null && n.next == null) return 0;\n"
              "\treturn 1;\n}\n", "T", "null", "n.value ==", "==")
-    mismatch("struct Stack<T> { underlying T[]; top int; }\n"
+    mismatch("struct Stack<T> { underlying []T; top int; }\n"
              "func newStack<T>() Stack<T> {\n"
              "\ts: Stack<T> = {0->any, 0};\n\treturn s;\n}\n"
-             "func main() {}", "any[]", "any", "s: Stack<T>", "->any")
+             "func main() {}", "[]any", "any", "s: Stack<T>", "->any")
     mismatch("func main() {\n\tx := 1;\n\tx = false;\n}", "int", "bool", "x =", "=")
     mismatch("func main() {\n\tx: int = false;\n}", "int", "bool", "x:", "x")
     mismatch("func main() {\n\tx := 1 + true;\n}", "int", "bool", "x :=", "+")
@@ -98,8 +101,8 @@ with tempfile.TemporaryDirectory(prefix="ocean semantic diagnostics ") as direct
     mismatch("func main() {\n\ta := {1, 2};\n\tx := a[1.5];\n}", "int", "float", "a[", "1.5")
     mismatch("struct Point { value bool; }\nfunc main() {\n\tp := Point{value: 7};\n}", "bool", "int", "p :=", "7")
     mismatch("func main() {\n\tx := 1;\n\tp: *bool = &x;\n}", "*bool", "*int", "p:", "p")
-    mismatch("func main() {\n\tb := {true};\n\ta: int[] = b;\n}", "int[]", "bool[1]", "a:", "a")
-    mismatch("func main() {\n\ta: buffer<int>[2];\n\tb: buffer<int>[3];\n\ta = b;\n}", "buffer<int>[2]", "buffer<int>[3]", "a =", "=")
+    mismatch("func main() {\n\tb := {true};\n\ta: []int = b;\n}", "[]int", "[1]bool", "a:", "a")
+    mismatch("func main() {\n\ta: buffer<int, 2>;\n\tb: buffer<int, 3>;\n\ta = b;\n}", "buffer<int, 2>", "buffer<int, 3>", "a =", "=")
     mismatch("struct Box<T any> { value T; }\nfunc main() {\n\tb := Box<bool>{true};\n\ta: Box<int> = b;\n}", "__pkg0_Box<int>", "__pkg0_Box<bool>", "a:", "a")
     mismatch("func f(x int) int { return x; }\nfunc g(x bool) bool { return x; }\n"
              "func main() {\n\tcallback := f;\n\tcallback = g;\n}", "func(int) int", "func(bool) bool", "callback =", "=")

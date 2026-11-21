@@ -6,6 +6,8 @@
 #include "array_type.h"
 #include "buffer_type.h"
 #include "value_list.h"
+#include "legacy_types.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,6 +87,7 @@ static Type unknown = {.name = "?"}, integer = {.name = "int"}, floating = {.nam
             signedByte = {.name = "i8"},
             string = {.name = "dynamic-array", .element = &signedByte, .dynamicArray = 1, .immutableString = 1},
             boolean = {.name = "bool"}, any = {.name = "any"}, nothing = {.name = "void"};
+static Type singlePrecisionFloat = {.name = "float", .spelling = "f32", .semanticBase = &floating};
 static Type unsignedIntegerType = {.name = "int", .spelling = "uint", .semanticBase = &integer};
 static void *allocate(Context *c, size_t n) {
     void *p = calloc(1, n);
@@ -248,10 +251,10 @@ static int integerShape(Type *t, int *isUnsigned) {
     if (definedType(t) || (canonical(t) != &integer && canonical(t) != &signedByte)) return 0;
     const char *name = t->spelling ? t->spelling : t->name;
     if (t->varintBits) { *isUnsigned = t->varintUnsigned; return t->varintBits; }
-    *isUnsigned = name[0] == 'u' || !strcmp(name, "byte");
-    if (!strcmp(name, "i8") || !strcmp(name, "u8") || !strcmp(name, "byte")) return 8;
+    *isUnsigned = name[0] == 'u';
+    if (!strcmp(name, "i8") || !strcmp(name, "u8")) return 8;
     if (!strcmp(name, "i16") || !strcmp(name, "u16")) return 16;
-    if (!strcmp(name, "i32") || !strcmp(name, "u32") || !strcmp(name, "rune")) return 32;
+    if (!strcmp(name, "i32") || !strcmp(name, "u32")) return 32;
     return 64;
 }
 static Type *sizedInteger(Context *c, unsigned width, int isUnsigned) {
@@ -280,6 +283,10 @@ static int integerFits(Type *expected, Type *actual) {
     if (!ew || !aw) return 0;
     return eu == au ? ew >= aw : (!eu && au && ew > aw);
 }
+static int floatWidth(Type *type) {
+    if (definedType(type) || canonical(type) != &floating) return 0;
+    return type->spelling && !strcmp(type->spelling, "f32") ? 32 : 64;
+}
 static int compatibleTypes(Type *a, Type *b) {
     if (a == b) return 1;
     if (typeSetSpan(a).nTokens) return typeSetFits(a->context, a, b, 0);
@@ -287,6 +294,8 @@ static int compatibleTypes(Type *a, Type *b) {
 
     int au, bu;
     if (integerShape(a, &au) && integerShape(b, &bu)) return integerFits(a, b);
+    int aw = floatWidth(a), bw = floatWidth(b);
+    if (aw && bw) return bw <= aw;
     a = canonical(a);
     // A boxed value does not establish the array shape or element type.
     // Require explicit narrowing before assigning it to an array destination.
@@ -389,7 +398,7 @@ static Type *builtinType(const char *n) {
         return &string;
     if (!strcmp(n, "float") || !strcmp(n, "f32") || !strcmp(n, "f64"))
         return &floating;
-    const char *ints[] = {"int", "uint", "byte", "rune", "i8",  "i16",
+    const char *ints[] = {"int", "uint", "i8",  "i16",
                           "i32", "i64",  "u8",   "u16",  "u32", "u64"};
     for (size_t i = 0; i < sizeof(ints) / sizeof(*ints); i++)
         if (!strcmp(n, ints[i]))
@@ -444,11 +453,12 @@ static Type *typeOf(Context *c, typeTokens span) {
             error(c, t, "void is not a map storage type");
         return v;
     }
-    if (span.nTokens > 1 && span.tokens[span.nTokens - 1].type == STAR) {
+    if (t.type == STAR) {
+        // A prefix '*' applies to the complete type that follows it.
         Type *pointer = allocate(c, sizeof(*pointer));
         pointer->name = "pointer";
         c->typeIndirection++;
-        pointer->element = typeOf(c, (typeTokens){span.nTokens - 1, span.tokens});
+        pointer->element = span.nTokens > 1 ? typeOf(c, (typeTokens){span.nTokens - 1, span.tokens + 1}) : &unknown;
         c->typeIndirection--;
         return pointer;
     }
@@ -476,6 +486,10 @@ static Type *typeOf(Context *c, typeTokens span) {
     }
     typeTokens sizedElement, sizedDimension;
     if (sizedArrayTypeParts(span, &sizedElement, &sizedDimension)) {
+        if (sizedDimension.nTokens && sizedDimension.tokens[0].type == DOT) {
+            error(c, t, "[...]T is only valid with a literal body");
+            return &unknown;
+        }
         Type *v = allocate(c, sizeof(*v));
         v->name = "fixed-array";
         v->element = typeOf(c, sizedElement);
@@ -531,7 +545,7 @@ static Type *typeOf(Context *c, typeTokens span) {
         typeTokens dimension;
     typeTokens constraint; // Inherited from a receiver struct parameter, when present.
         if (!bufferTypeParts(span, &element, &dimension) || bufferDimensionKind(dimension) < 0) {
-            error(c, t, "expected buffer<T>[size] with a positive size, or buffer<T>[]");
+            error(c, t, "expected buffer<T, size> with a positive size, or buffer<T>");
             return &unknown;
         }
         Type *v = allocate(c, sizeof(*v));
@@ -539,7 +553,7 @@ static Type *typeOf(Context *c, typeTokens span) {
         v->element = typeOf(c, element);
         if (v->element == &nothing) error(c, t, "void is not a buffer element storage type");
         v->bufferSize = bufferDimensionKind(dimension);
-        v->bufferFamily = span.tokens[span.nTokens - 1].type == GREATER_THAN ? 2 : 0;
+        v->bufferFamily = dimension.nTokens ? 0 : 2;
         v->dimension = dimension;
         if (v->bufferSize == 1)
             v->count = (size_t)dimension.tokens[0].numValue.integer;
@@ -547,22 +561,9 @@ static Type *typeOf(Context *c, typeTokens span) {
             error(c, t, "buffer element types must have a fixed storage size");
         return v;
     }
-    if (t.type == LEFT_BRACKET || t.type == STAR) {
-        size_t i = 1;
-        if (t.type == LEFT_BRACKET) {
-            while (i < span.nTokens && span.tokens[i].type != RIGHT_BRACKET)
-                i++;
-            i++;
-        }
-        Type *v = allocate(c, sizeof(*v));
-        v->name = t.type == STAR ? "pointer" : "array";
-        if (i < span.nTokens) {
-            if (t.type == STAR) c->typeIndirection++;
-            v->element = typeOf(c, (typeTokens){span.nTokens - i, span.tokens + i});
-            if (t.type == STAR) c->typeIndirection--;
-        } else
-            v->element = &unknown;
-        return v;
+    if (t.type == LEFT_BRACKET) {
+        error(c, t, "expected an array type []T or [N]T");
+        return &unknown;
     }
     if (span.nTokens >= 3 && span.tokens[span.nTokens - 2].type == DOT) {
         Type *parent = typeOf(c, (typeTokens){span.nTokens - 2, span.tokens});
@@ -770,29 +771,27 @@ static void formatType(FILE *out, Type *t, unsigned depth) {
         fputc('*', out);
         formatType(out, t->element, depth + 1);
     } else if (!strcmp(t->name, "dynamic-array") || !strcmp(t->name, "array")) {
-        if (t->mixed) fputs("mixed ", out);
+        fputs(t->mixed ? "mixed []" : "[]", out);
         formatType(out, t->element, depth + 1);
-        fputs("[]", out);
     } else if (!strcmp(t->name, "fixed-array") && t->bufferFamily == 2) {
         fputs("array<", out); formatType(out, t->element, depth + 1); fputc('>', out);
     } else if (!strcmp(t->name, "fixed-array")) {
-        formatType(out, t->element, depth + 1);
         fputc('[', out);
         if (t->bufferSize == 1) fprintf(out, "%zu", t->count);
         else for (size_t i = 0; i < t->dimension.nTokens; i++) fputs(t->dimension.tokens[i].lexeme, out);
         fputc(']', out);
+        formatType(out, t->element, depth + 1);
     } else if (!strcmp(t->name, "buffer")) {
         if (t->bufferFamily == 1) { fputs("buffer", out); return; }
         fputs("buffer<", out);
         formatType(out, t->element, depth + 1);
-        fputc('>', out);
-        if (t->bufferFamily == 2) return;
-        fputc('[', out);
         if (t->bufferSize == 1)
-            fprintf(out, "%zu", t->count);
-        else if (t->dimension.nTokens)
+            fprintf(out, ", %zu", t->count);
+        else if (t->bufferSize == 2 && t->dimension.nTokens) {
+            fputs(", ", out);
             formatTypeSpan(out, t->dimension, NULL, depth);
-        fputc(']', out);
+        }
+        fputc('>', out);
     } else if (!strcmp(t->name, "tuple")) {
         fputc('(', out);
         for (size_t i = 0; i < t->nArguments; i++) {
@@ -830,6 +829,8 @@ static void check(Context *c, Type *expected, Type *actual, token at) {
     int eu, au;
     if (integerShape(expected, &eu) && integerShape(actual, &au))
         fputs("; narrowing integer conversion requires an explicit -> cast", stderr);
+    else if (floatWidth(expected) == 32 && floatWidth(actual) == 64)
+        fputs("; narrowing floating-point conversion requires an explicit -> cast", stderr);
     diagnosticEnd(programSource(c->program, at.filename), at);
     c->errors++;
 }
@@ -927,23 +928,73 @@ static Type *checkComposite(Context *c, Type *target, expr *e, token at) {
     error(c, at, "literal requires an array, buffer, or struct assignment destination");
     return &unknown;
 }
-// Only literal syntax (including a negated literal) participates in implicit
-// integer-to-float conversion. Rewrite it so backend inference sees the float too.
-static int coerceFloatLiteral(Type *expected, expr *e) {
-    if (definedType(expected) || canonical(expected) != &floating) return 0;
+// Convert binary and octal spellings to equivalent hexadecimal text before
+// rounding. strtof parses the exact significand and power-of-two exponent.
+static float parseSinglePrecision(const char *spelling) {
+    if (spelling[0] != '0' || !strchr("bBoO", spelling[1]))
+        return strtof(spelling, NULL);
+    unsigned bitsPerDigit = spelling[1] == 'b' || spelling[1] == 'B' ? 1 : 3;
+    const char *point = strchr(spelling, '.');
+    size_t length = strlen(spelling);
+    char *hex = malloc(length + 32);
+    if (!hex) exit(1);
+    hex[0] = '0';
+    hex[1] = 'x';
+    size_t end = 2;
+    unsigned bits = 0, chunk = 0;
+    const char *digits = "0123456789abcdef";
+    for (size_t i = length; i-- > 2;) {
+        if (spelling[i] == '.') continue;
+        chunk |= (unsigned)(spelling[i] - '0') << bits;
+        bits += bitsPerDigit;
+        if (bits >= 4) {
+            hex[end++] = digits[chunk & 15];
+            chunk >>= 4;
+            bits -= 4;
+        }
+    }
+    if (bits) hex[end++] = digits[chunk];
+    for (size_t left = 2, right = end - 1; left < right; left++, right--) {
+        char digit = hex[left];
+        hex[left] = hex[right];
+        hex[right] = digit;
+    }
+    size_t fractionalBits = (size_t)(spelling + length - point - 1) * bitsPerDigit;
+    snprintf(hex + end, length + 32 - end, "p-%zu", fractionalBits);
+    float value = strtof(hex, NULL);
+    free(hex);
+    return value;
+}
+
+// Literal syntax, including negated literals, may take the expected float width.
+static int coerceFloatLiteral(Context *c, Type *expected, expr *e, int contextual) {
+    int width = floatWidth(expected);
+    if (!width) return 0;
     if (e->type == EXPR_TYPE_UNARY &&
         ((struct expr_unary *)e->underlying)->operation == UNARY_NEGATE) {
         expr *child = &((struct expr_unary *)e->underlying)->child;
-        if (child->type == EXPR_TYPE_LITERAL) return coerceFloatLiteral(expected, child);
+        if (child->type == EXPR_TYPE_LITERAL) return coerceFloatLiteral(c, expected, child, contextual);
         return 0;
     }
     if (e->type != EXPR_TYPE_LITERAL) return 0;
     struct expr_literal *literal = e->underlying;
+    if (contextual && width == 32 && literal->type == LITERAL_TYPE_FLOAT &&
+        literal->floatSpelling && !literal->singlePrecision) {
+        float number = parseSinglePrecision(literal->floatSpelling);
+        if (!isfinite(number))
+            error(c, e->location, "floating-point literal is out of range for f32");
+        *(double *)literal->value = number;
+        literal->singlePrecision = 1;
+        return 1;
+    }
     if (literal->type != LITERAL_TYPE_INT) return 0;
     double *number = malloc(sizeof(*number));
     if (!number) exit(1);
-    *number = literal->wideInteger ? strtod(literal->wideInteger + 1, NULL) * (literal->negativeWide ? -1 : 1)
-              : literal->unsignedLiteral ? (double)*(uint64_t *)literal->value : (double)*(int64_t *)literal->value;
+    double value = literal->wideInteger ? strtod(literal->wideInteger + 1, NULL) * (literal->negativeWide ? -1 : 1)
+                   : literal->unsignedLiteral ? (double)*(uint64_t *)literal->value
+                                              : (double)*(int64_t *)literal->value;
+    *number = width == 32 ? (float)value : value;
+    literal->singlePrecision = width == 32;
     literal->wideInteger = NULL;
     free(literal->value);
     literal->value = number;
@@ -1032,9 +1083,7 @@ static Type *widenToTypeSet(Context *c, Type *expected, Type *actual, expr *valu
         } else if (list.tokens[start].type != TILDE && !definedType(candidate) &&
                    !definedType(actual) &&
                    (integerFits(candidate, actual) ||
-                    (canonical(candidate) == &floating && canonical(actual) == &floating &&
-                     candidate->spelling == NULL && actual->spelling &&
-                     !strcmp(actual->spelling, "f32")))) {
+                    (floatWidth(candidate) == 64 && floatWidth(actual) == 32))) {
             typeIntegerLiteral(candidate, value);
             return candidate;
         }
@@ -1044,7 +1093,7 @@ static Type *widenToTypeSet(Context *c, Type *expected, Type *actual, expr *valu
 }
 
 static Type *expectedExpression(Context *c, Type *expected, expr *e, token at) {
-    coerceFloatLiteral(expected, e);
+    coerceFloatLiteral(c, expected, e, 1);
     if (e->type == EXPR_TYPE_COMPOSITE && !((struct expr_composite *)e->underlying)->type.type)
         return checkComposite(c, expected, e, at);
     Type *actual = expression(c, e);
@@ -1082,7 +1131,7 @@ static TypeList valueTypes(Context *c, expr *values, size_t count, Type **expect
                            size_t nExpected, token at, int assignmentContext) {
     TypeList list = {.items = allocate(c, sizeof(Type *) * (count + 1)), .count = count};
     for (size_t i = 0; i < count; i++) {
-        if (i < nExpected) coerceFloatLiteral(expected[i], &values[i]);
+        if (!assignmentContext && i < nExpected) coerceFloatLiteral(c, expected[i], &values[i], 1);
         Type *t = assignmentContext && i < nExpected
                       ? expectedExpression(c, expected[i], &values[i], at)
                       : expression(c, &values[i]);
@@ -1091,6 +1140,16 @@ static TypeList valueTypes(Context *c, expr *values, size_t count, Type **expect
             Type *parent = expression(c, &index->parent);
             if (parent->mapKey || !strcmp(parent->name, "dynamic-array") || !strcmp(parent->name, "fixed-array")) {
                 index->tryIndex = 1;
+                Type **items = allocate(c, 2 * sizeof(*items));
+                items[0] = t; items[1] = &boolean;
+                return (TypeList){items, 2};
+            }
+        }
+        if (assignmentContext && count == 1 && nExpected == 2 && values[i].type == EXPR_TYPE_ASSERTION) {
+            // Enum extraction is rewritten above; record patterns bind their own names.
+            struct expr_assertion *assertion = values[i].underlying;
+            if (!assertion->isTypeGuard && !assertion->pattern && strcmp(t->name, "tuple")) {
+                assertion->tryAssert = 1;
                 Type **items = allocate(c, 2 * sizeof(*items));
                 items[0] = t; items[1] = &boolean;
                 return (TypeList){items, 2};
@@ -1593,6 +1652,36 @@ static int interfaceFits(Context *c, Type *expected, Type *actual, unsigned dept
 static token typeToken(enum tokenType kind, char *lexeme) {
     return (token){.type = kind, .lexeme = lexeme};
 }
+static size_t tokenOffset(Context *, token);
+/* Legacy Type[n] in an expression: report the prefix [n]Type allocation. */
+static void legacyAllocation(Context *c, struct expr_index *v, typeTokens element) {
+    const char *text = programSource(c->program, v->location.filename);
+    char *dimension = NULL;
+    if (text) {
+        size_t open = tokenOffset(c, v->location), close = open + 1, depth = 1;
+        while (text[close] && depth) {
+            if (text[close] == '[') depth++;
+            if (text[close] == ']' && !--depth) break;
+            close++;
+        }
+        dimension = strndup(text + open + 1, close - open - 1);
+    }
+    char *name = joinTypeTokens(element.tokens, element.nTokens);
+    // Package qualification is an implementation detail, not a source type name.
+    for (char *p = name; (p = strstr(p, "__pkg"));) {
+        char *q = p + 5;
+        while (*q >= '0' && *q <= '9') q++;
+        if (*q == '_') memmove(p, q + 1, strlen(q + 1) + 1); else p = q;
+    }
+    char *suggestion = malloc(strlen(name) + (dimension ? strlen(dimension) : 1) + 4);
+    if (!suggestion) exit(1);
+    sprintf(suggestion, "[%s]%s", dimension ? dimension : "", name);
+    char *message = legacyTypeMessage(suggestion, LEGACY_ARRAY);
+    token at = diagnosticLocation(c, element.tokens[0]);
+    diagnostic(programSource(c->program, at.filename), at, "semantic", "error", "%s", message);
+    c->errors++;
+    free(message); free(suggestion); free(name); free(dimension);
+}
 static int typeExpression(Context *c, expr *e, typeTokens *out) {
     *out = (typeTokens){0};
     if (e->type == EXPR_TYPE_TYPE_NAME) {
@@ -1647,31 +1736,6 @@ static int typeExpression(Context *c, expr *e, typeTokens *out) {
             cursor += v->typeArguments[i].nTokens;
         }
         out->tokens[cursor] = typeToken(GREATER_THAN, ">");
-        return 1;
-    }
-    if (e->type == EXPR_TYPE_INDEX) {
-        struct expr_index *v = e->underlying;
-        typeTokens base;
-        if (!typeExpression(c, &v->parent, &base))
-            return 0;
-        char sizedBuffer = v->index.type == EXPR_TYPE_LITERAL &&
-                           ((struct expr_literal *)v->index.underlying)->type == LITERAL_TYPE_INT;
-        if (v->index.type && !sizedBuffer) {
-            free(base.tokens);
-            return 0;
-        }
-        size_t extra = sizedBuffer ? 3 : 2;
-        token *tokens = realloc(base.tokens, sizeof(token) * (base.nTokens + extra));
-        if (!tokens)
-            exit(1);
-        tokens[base.nTokens] = typeToken(LEFT_BRACKET, "[");
-        if (sizedBuffer) {
-            tokens[base.nTokens + 1] = typeToken(LITERAL_INT, "<buffer size>");
-            tokens[base.nTokens + 1].numValue.integer =
-                *(int64_t *)((struct expr_literal *)v->index.underlying)->value;
-        }
-        tokens[base.nTokens + extra - 1] = typeToken(RIGHT_BRACKET, "]");
-        *out = (typeTokens){base.nTokens + extra, tokens};
         return 1;
     }
     return 0;
@@ -1898,6 +1962,14 @@ static Type *operatorResult(Context *c, enum binaryExprType op, Type *a, Type *b
         return &boolean;
     return NULL;
 }
+static int arithmeticPointer(Type *type) {
+    type = representation(type);
+    if (strcmp(type->name, "pointer") || !type->element) return 0;
+    Type *element = representation(type->element);
+    return element != &nothing && element->bufferSize != 2 &&
+           (strcmp(element->name, "fixed-array") || element->bufferFamily != 2);
+}
+
 static int abstractOperand(Type *t) {
     return t->abstractParameter || typeSetSpan(t).nTokens || t->interface || canonical(t) == &any;
 }
@@ -1990,9 +2062,9 @@ static Type *expression(Context *c, expr *e) {
         if (v->type == LITERAL_TYPE_INT && v->unsignedLiteral) {
             return &unsignedIntegerType;
         }
-        return v->type == LITERAL_TYPE_STRING  ? &string
-               : v->type == LITERAL_TYPE_FLOAT ? &floating
-                                               : &integer;
+        if (v->type == LITERAL_TYPE_FLOAT)
+            return v->singlePrecision ? &singlePrecisionFloat : &floating;
+        return v->type == LITERAL_TYPE_STRING ? &string : &integer;
     }
     case EXPR_TYPE_FUNCTION: {
         Type *t = allocate(c, sizeof(*t));
@@ -2054,15 +2126,10 @@ static Type *expression(Context *c, expr *e) {
     case EXPR_TYPE_INDEX: {
         struct expr_index *v = e->underlying;
         typeTokens element;
-        if (v->index.type && typeExpression(c, &v->parent, &element)) {
-            struct expr_array_new *array = malloc(sizeof(*array));
-            if (!array)
-                exit(1);
-            *array = (struct expr_array_new){element, v->index};
-            free(v);
-            e->type = EXPR_TYPE_ARRAY_NEW;
-            e->underlying = array;
-            return expression(c, e);
+        if (typeExpression(c, &v->parent, &element)) {
+            legacyAllocation(c, v, element);
+            free(element.tokens);
+            return &unknown;
         }
         Type *p = expression(c, &v->parent);
         if (p->mapKey) {
@@ -2080,20 +2147,32 @@ static Type *expression(Context *c, expr *e) {
             error(c, at, "value is not indexable");
         return &unknown;
     }
+    case EXPR_TYPE_TYPE_NAME: {
+        typeTokens span = ((struct expr_zero *)e->underlying)->type;
+        typeTokens element, dimension;
+        int buffer = bufferTypeParts(span, &element, &dimension) && dimension.nTokens;
+        if (buffer || sizedArrayTypeParts(span, &element, &dimension)) {
+            expr *count = parseBufferDimension(dimension);
+            if (!count) { error(c, at, "invalid allocation length"); return &unknown; }
+            struct expr_array_new *array = malloc(sizeof(*array));
+            if (!array) exit(1);
+            *array = (struct expr_array_new){.elementType = element, .count = *count, .buffer = (char)buffer};
+            free(count);
+            e->type = EXPR_TYPE_ARRAY_NEW;
+            e->underlying = array;
+            return expression(c, e);
+        }
+        error(c, at, "a type is not a value; use T{...}, zero(T), or [n]T to construct one");
+        return &unknown;
+    }
     case EXPR_TYPE_ARRAY_NEW: {
         struct expr_array_new *v = e->underlying;
         Type *t = allocate(c, sizeof(*t));
         t->name = "dynamic-array";
         t->dynamicArray = 1;
         t->element = typeOf(c, v->elementType);
-        if (v->buffer || (!strcmp(t->element->name, "buffer") && t->element->bufferSize == 0)) {
-            if (!v->buffer) {
-                t = t->element;
-                v->elementType = (typeTokens){v->elementType.nTokens - 3, v->elementType.tokens + 2};
-                v->buffer = 1;
-            } else {
-                t->name = "buffer";
-            }
+        if (v->buffer) {
+            t->name = "buffer";
             t->bufferFamily = 0;
             t->bufferSize = 2;
             if (v->count.type == EXPR_TYPE_LITERAL &&
@@ -2406,8 +2485,9 @@ static Type *expression(Context *c, expr *e) {
         Type *a = recreated && recreated->freed ? recreated->type : expression(c, &v->left);
         Type *b = v->operation == EXPR_ASSIGNMENT ? expectedExpression(c, a, &v->right, at)
                                                   : expression(c, &v->right);
-        if (coerceFloatLiteral(a, &v->right)) b = expression(c, &v->right);
-        if (coerceFloatLiteral(b, &v->left)) a = expression(c, &v->left);
+        if (coerceFloatLiteral(c, a, &v->right, baseOperation(v->operation) != v->operation))
+            b = expression(c, &v->right);
+        if (coerceFloatLiteral(c, b, &v->left, 0)) a = expression(c, &v->left);
         if (integerLiteralFits(a, &v->right) && !(integerFits(a, b) && integerFits(b, a))) {
             typeIntegerLiteral(a, &v->right);
             b = a;
@@ -2436,8 +2516,30 @@ static Type *expression(Context *c, expr *e) {
             else if (!numericPair && !equalityCompatible(a, b)) check(c, a, b, at);
             return &boolean;
         }
+        enum binaryExprType pointerOp = baseOperation(v->operation);
+        if (pointerOp == EXPR_ADD || pointerOp == EXPR_SUBTRACT) {
+            int isUnsigned;
+            Type *result = NULL;
+            if (arithmeticPointer(a) && integerShape(b, &isUnsigned))
+                result = a;
+            else if (v->operation == EXPR_ADD && arithmeticPointer(b) && integerShape(a, &isUnsigned))
+                result = b;
+            else if (v->operation == EXPR_SUBTRACT && arithmeticPointer(a) && identicalTypes(a, b))
+                result = &integer;
+            if (result) {
+                if (pointerOp != v->operation && !writable(c, &v->left))
+                    mutationError(c, &v->left, at, "assignment requires a writable value");
+                return result;
+            }
+        }
         int collectionAddition = (v->operation == EXPR_ADD || v->operation == EXPR_ADD_EQUALS) &&
             (a->dynamicArray || b->dynamicArray || !strcmp(a->name,"fixed-array") || !strcmp(b->name,"fixed-array"));
+        if (!collectionAddition && (pointerOp == EXPR_ADD || pointerOp == EXPR_SUBTRACT ||
+                                    pointerOp != v->operation) &&
+            (!strcmp(representation(a)->name, "pointer") || !strcmp(representation(b)->name, "pointer"))) {
+            error(c, at, "invalid pointer arithmetic operands");
+            return &unknown;
+        }
         if (v->operation != EXPR_ASSIGNMENT && v->operation != EXPR_COMMA && !collectionAddition &&
             a != &nullValue && b != &nullValue && (abstractOperand(a) || abstractOperand(b))) {
             enum binaryExprType op = baseOperation(v->operation);
@@ -2614,6 +2716,9 @@ static Type *expression(Context *c, expr *e) {
         }
         if (v->operation == UNARY_SIZEOF)
             return &integer;
+        if (v->operation >= UNARY_POSTFIX_INCREMENT && v->operation <= UNARY_PREFIX_DECREMENT &&
+            arithmeticPointer(t))
+            return t;
         if (abstractOperand(t)) {
             v->operandTypes=typeSetSpan(t);
             enum binaryExprType op = v->operation == UNARY_BITWISE_NOT ? EXPR_XOR : EXPR_SUBTRACT;
@@ -2957,6 +3062,10 @@ static void statement(Context *c, stmt *s) {
                 if (form == 1 || form == 2) error(c, v->vars[i], "enum payload variant requires construction");
                 a = enumValueType(c, a);
             }
+            int isUnsigned;
+            if (declared && !strcmp(representation(declared)->name, "pointer") &&
+                values.count == v->nInitValues && integerShape(a, &isUnsigned))
+                a = declared;
             if (!declared && a == &nullValue)
                 error(c, v->vars[i], "null requires an explicit pointer type");
             if (declared)
