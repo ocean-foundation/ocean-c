@@ -1458,7 +1458,7 @@ static MethodInstance *methodInstance(Backend *b, Kind receiver, const char *nam
         while (i < count && m->arguments[i] == arguments[i]) i++;
         if (i == count) { free(arguments); return m; }
     }
-    if (b->nMethods >= 256) {
+    if (b->nMethods >= 1000000) {
         free(arguments);
         fail(b, "method specialization limit exceeded");
         return NULL;
@@ -1501,7 +1501,7 @@ static MethodInstance *interfaceInstance(Backend *b, struct stmt_func *required,
             (!count || !memcmp(arguments,m->arguments,count*sizeof(Kind)))) {
             free(arguments); return m;
         }
-    if (b->nMethods >= 256) {
+    if (b->nMethods >= 1000000) {
         free(arguments); fail(b, "method specialization limit exceeded"); return NULL;
     }
     MethodInstance *m=checked(sizeof(*m));
@@ -1547,7 +1547,7 @@ static MethodInstance *functionInstance(Backend *b, struct stmt_func *f,
             return m;
         }
     }
-    if (b->nMethods >= 256) {
+    if (b->nMethods >= 1000000) {
         free(arguments);
         fail(b, "function specialization limit exceeded");
         return NULL;
