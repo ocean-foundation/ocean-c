@@ -446,6 +446,88 @@ static void addSymbol(packageBuild *b, Package *package, stmt *declaration, toke
     s->qualified = format(b, "__pkg%zu_%s", package->id, name.lexeme);
     s->next = package->symbols; package->symbols = s;
 }
+/* Linker-flag string injection (-ldflags "-X importpath.name=value"). */
+typedef struct Injection { char *path, *name, *value; } Injection;
+static Injection *injections;
+static size_t nInjections;
+static char *ldflagWord(const char **cursor) {
+    const char *p = *cursor;
+    while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+    if (!*p) { *cursor = p; return NULL; }
+    size_t capacity = strlen(p) + 1, n = 0;
+    char *word = malloc(capacity), quote = 0;
+    if (!word) return NULL;
+    for (; *p; p++) {
+        if (quote) { if (*p == quote) quote = 0; else word[n++] = *p; continue; }
+        if (*p == '\'' || *p == '"') { quote = *p; continue; }
+        if (*p == ' ' || *p == '\t' || *p == '\n') break;
+        word[n++] = *p;
+    }
+    word[n] = 0; *cursor = p;
+    return word;
+}
+int packageSetLinkerFlags(const char *flags) {
+    const char *cursor = flags;
+    for (char *word; (word = ldflagWord(&cursor));) {
+        char *spec = NULL;
+        if (!strcmp(word, "-X") || !strcmp(word, "--X")) { free(word); spec = ldflagWord(&cursor); }
+        else if (!strncmp(word, "-X=", 3)) { spec = strdup(word + 3); free(word); }
+        else { free(word); return -1; }
+        if (!spec) return -1;
+        char *equals = strchr(spec, '='), *dot = equals ? NULL : NULL;
+        if (!equals) { free(spec); return -1; }
+        *equals = 0;
+        dot = strrchr(spec, '.');
+        if (!dot || dot == spec || !dot[1]) { free(spec); return -1; }
+        *dot = 0;
+        Injection *grown = realloc(injections, (nInjections + 1) * sizeof(*grown));
+        if (!grown) { free(spec); return -1; }
+        injections = grown;
+        injections[nInjections++] = (Injection){spec, dot + 1, equals + 1};
+    }
+    return 0;
+}
+static char *standardSource(packageBuild *b);
+/* Import path of a loaded package: module-qualified, or relative to the standard library. */
+static char *packageImportPath(packageBuild *b, Package *p) {
+    const char *standard = standardSource(b);
+    char *root = standard ? canonical(b, standard) : NULL;
+    if (root && prefix(p->directory, root) && strlen(p->directory) > strlen(root)) return pkgString(b, p->directory + strlen(root) + 1);
+    if (p->module && p->module->name) return format(b, "%s%s", p->module->name, p->directory + strlen(p->module->root));
+    return pkgString(b, p->directory);
+}
+static void injectStrings(packageBuild *b, Package *p, File *file, struct stmt_var *v) {
+    if (!nInjections) return;
+    char *path = NULL;
+    for (size_t k = 0; k < v->nVars; k++) {
+        for (size_t i = 0; i < nInjections; i++) {
+            if (strcmp(injections[i].name, v->vars[k].lexeme)) continue;
+            if (!path) path = packageImportPath(b, p);
+            int root = p->id == 0 && !strcmp(injections[i].path, p->name);
+            if (strcmp(injections[i].path, path) && !root) continue;
+            if (v->nInitValues != v->nVars && !(v->nInitValues == 0 && v->nVars == 1)) {
+                error(b, file->path, "cannot inject -X %s.%s: declare it with its own initializer", injections[i].path, injections[i].name);
+                continue;
+            }
+            if (!v->nInitValues) {
+                v->initValues = calloc(1, sizeof(expr));
+                if (!v->initValues) return;
+                v->nInitValues = 1;
+            }
+            struct expr_literal *literal = calloc(1, sizeof(*literal));
+            if (!literal) return;
+            literal->type = LITERAL_TYPE_STRING;
+            literal->value = injections[i].value;
+            literal->stringLength = strlen(injections[i].value);
+            expr *value = &v->initValues[k];
+            token location = value->location.line ? value->location : v->vars[k];
+            location.type = LITERAL_STRING;
+            location.lexeme = injections[i].value;
+            location.stringLength = strlen(injections[i].value);
+            *value = (expr){.type = EXPR_TYPE_LITERAL, .underlying = literal, .location = location};
+        }
+    }
+}
 static int testFilename(const char *name) {
     size_t n = strlen(name);
     return n >= 8 && !strcmp(name + n - 8, "_test.oc");
@@ -587,6 +669,7 @@ static Package *loadDirectory(packageBuild *b, const char *location) {
             else if (s->type == STMT_INTERFACE) addSymbol(b, p, s, ((struct stmt_interface *)s->value)->name);
             else if (s->type == STMT_VAR) {
                 struct stmt_var *v = s->value;
+                injectStrings(b, p, file, v);
                 for (size_t k = 0; k < v->nVars; k++) addSymbol(b, p, s, v->vars[k]);
             } else if (s->type == STMT_TYPE) addSymbol(b, p, s, ((struct stmt_type *)s->value)->name);
             else if (s->type == STMT_ENUM) {

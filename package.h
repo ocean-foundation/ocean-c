@@ -30,6 +30,10 @@ typedef void (*packageCandidateVisitor)(const char *name, const char *path, void
 /* Local and installed packages only; discovery never downloads modules. */
 void visitPackageCandidates(packageBuild *build, packageCandidateVisitor visitor, void *context);
 void freePackage(packageBuild *build);
+/* -ldflags "-X importpath.name=value": replace the initializer of a package-level
+ * variable with a string literal while loading. Specs are borrowed. Returns 0 on
+ * success or -1 for a malformed spec. Unknown targets are ignored, as in Go. */
+int packageSetLinkerFlags(const char *flags);
 /* `ocean fix`: rewrite legacy postfix type syntax in packages (dir, file, or dir/...). */
 int fixPackages(int count, char **locations);
 #endif

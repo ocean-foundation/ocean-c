@@ -140,6 +140,11 @@ static int packageMain(int argc, char **argv) {
         if (!strcmp(argv[i], "-o")) {
             if (++i >= argc) { fprintf(stderr, "ocean: -o requires an output path\n"); return 1; }
             output = argv[i];
+        } else if (!strcmp(argv[i], "-ldflags") || !strcmp(argv[i], "--ldflags")) {
+            if (++i >= argc) { fprintf(stderr, "ocean: %s requires a flag string\n", argv[i - 1]); return 1; }
+            if (packageSetLinkerFlags(argv[i])) { fprintf(stderr, "ocean: invalid -ldflags; expected -X importpath.name=value\n"); return 1; }
+        } else if (!strncmp(argv[i], "-ldflags=", 9) || !strncmp(argv[i], "--ldflags=", 10)) {
+            if (packageSetLinkerFlags(strchr(argv[i], '=') + 1)) { fprintf(stderr, "ocean: invalid -ldflags; expected -X importpath.name=value\n"); return 1; }
         } else if (!strcmp(argv[i], "--emit-llvm")) emit = 1;
         else if (!strcmp(argv[i], "--check")) check = 1;
         else if (!strcmp(argv[i], "--static") || !strcmp(argv[i], "-s")) staticLink = 1;
@@ -368,8 +373,9 @@ int main(int argc, char **argv) {
     }
     if (argc > 1 && (!strcmp(argv[1], "build") || !strcmp(argv[1], "run"))) {
         if (argc == 3 && !strcmp(argv[2], "--help")) {
-            printf("Usage: ocean build [--check | --emit-llvm | --static | -s] [-o output] [location]\n"
-                   "       ocean run [--static | -s] [location] [program-arguments...] [-- program-arguments...]\n");
+            printf("Usage: ocean build [--check | --emit-llvm | --static | -s] [-ldflags flags] [-o output] [location]\n"
+                   "       ocean run [--static | -s] [-ldflags flags] [location] [program-arguments...] [-- program-arguments...]\n"
+                   "-ldflags \"-X importpath.name=value\" sets a package-level string variable.\n");
             return 0;
         }
         return packageMain(argc, argv);
