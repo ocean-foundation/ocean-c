@@ -89,6 +89,12 @@ int main(void) {
     assert(((struct stmt_return*)f->body.stmts[0].value)->nValues == 3);
     f = valid("func unnamed(int, string) (int, string,) {}");
     assert(f->paramNames[0].type == EOF_TOKEN && f->resultNames[1].type == EOF_TOKEN);
+    f = valid("func unnamed(int, pkg.Type, Result<int>) (string, Optional<float>) {}");
+    assert(f->nParams == 3 && f->nResults == 2);
+    assert(f->paramNames[1].type == EOF_TOKEN && f->resultNames[1].type == EOF_TOKEN);
+    f = valid("func groupedGeneric(a, b Optional<float>) (x, y pkg.Type) {}");
+    assert(f->nParams == 2 && f->nResults == 2);
+    assert(!strcmp(f->paramNames[1].lexeme, "b") && !strcmp(f->resultNames[1].lexeme, "y"));
     f = valid("func blanks(_ int, _ string) {}"); assert(f->nParams == 2);
     f = valid("func sum(label string, values ...int) int { return 0 }");
     assert(f->isVariadic && f->paramTypeNames[1].nTokens == 1);

@@ -1625,6 +1625,16 @@ static char parseSignatureFields(parserState *state, signatureFields *fields,
                 token next = state->tokens[cursor + 1];
                 if (next.type != COMMA) {
                     if (next.type != RIGHT_PAREN && next.type != EOF_TOKEN) {
+                        if (cursor != namesStart) {
+                            // A later field may be an unnamed generic or qualified type.
+                            parserState field = *state;
+                            field.quietErrors = 1;
+                            field.tokenIndex = cursor;
+                            if (parseTypeConstraint(&field) &&
+                                (currentToken(&field).type == COMMA ||
+                                 currentToken(&field).type == RIGHT_PAREN))
+                                break;
+                        }
                         hasNames = 1;
                         namesEnd = cursor;
                     }

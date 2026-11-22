@@ -331,6 +331,9 @@ Statements end in `;` unless they end in a block. Use braces and parenthesized
 control-flow conditions. Variables use `name: Type` and inferred declarations
 use `:=`. Parameters, named results, and fields use `name Type`. Extern
 declarations use C ordering.
+Parenthesized result lists may use unnamed types, including qualified and
+generic types such as `(string, Optional<float>)`. To name results, name every
+result in the list.
 
 Every type modifier is a prefix that applies to the whole type after it:
 `[]T` (dynamic array), `[n]T` (array), `[...]T{...}` (array sized by its literal),
