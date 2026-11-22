@@ -246,7 +246,7 @@ typedef struct {
     TypeConstraint *constraints;
     unsigned nConstraints;
     int arrayViewUsed, homogeneousUsed;
-    int reflectionUsed, reflectionVariantUsed;
+    int reflectionUsed, reflectionVariantUsed, reflectionVarIntegerUsed;
     Kind reflectionFieldsKind;
     unsigned fixedCScalars;
     Value boxRegion;
@@ -4828,22 +4828,25 @@ static Value expressionImpl(Backend *b, expr *e) {
             return result;
         }
         if (!strcmp(name, "compilerReflectFields") || !strcmp(name, "compilerReflectIsStruct") ||
-            !strcmp(name, "compilerReflectIsEnum") || !strcmp(name, "compilerReflectEnumVariant")) {
+            !strcmp(name, "compilerReflectIsEnum") || !strcmp(name, "compilerReflectEnumVariant") ||
+            !strcmp(name, "compilerReflectVarInteger")) {
             int fields = !strcmp(name, "compilerReflectFields"), isEnum = !strcmp(name, "compilerReflectIsEnum"),
                 variant = !strcmp(name, "compilerReflectEnumVariant");
-            if (!b->function || b->function->compilerIntrinsic != (fields ? INTRINSIC_REFLECT_FIELDS : isEnum ? INTRINSIC_REFLECT_IS_ENUM : variant ? INTRINSIC_REFLECT_ENUM_VARIANT : INTRINSIC_REFLECT_IS_STRUCT) ||
+            int varInteger = !strcmp(name, "compilerReflectVarInteger");
+            if (!b->function || b->function->compilerIntrinsic != (fields ? INTRINSIC_REFLECT_FIELDS : isEnum ? INTRINSIC_REFLECT_IS_ENUM : variant ? INTRINSIC_REFLECT_ENUM_VARIANT : varInteger ? INTRINSIC_REFLECT_VAR_INTEGER : INTRINSIC_REFLECT_IS_STRUCT) ||
                 v->nParams != 1 || v->spread) {
                 fail(b, "reflection intrinsics are restricted to the standard library reflect package");
                 return value(b, BAD, "0");
             }
-            Kind kind = (fields || variant) ? resultType(b, b->function) : BOOL;
+            Kind kind = (fields || variant || varInteger) ? resultType(b, b->function) : BOOL;
             Value source = coerce(b, expression(b, &v->params[0]), SCALAR_ANY), result = temp(b, kind);
             b->reflectionUsed = 1;
             if (fields) b->reflectionFieldsKind = kind;
             if (variant) b->reflectionVariantUsed = 1;
+            if (varInteger) b->reflectionVarIntegerUsed = 1;
             fprintf(b->body, "  %s = call %s @__ocean.reflect.%s({ ptr, i64 } %s)\n", result.operand,
-                    irType(b, kind), fields ? "fields" : isEnum ? "is_enum" : variant ? "enum_variant" : "is_struct", source.operand);
-            if (fields || variant) {
+                    irType(b, kind), fields ? "fields" : isEnum ? "is_enum" : variant ? "enum_variant" : varInteger ? "var_integer" : "is_struct", source.operand);
+            if (fields || variant || varInteger) {
                 int previous = b->copyTransport; b->copyTransport = 2;
                 result = copyValue(b, result, 0); b->copyTransport = previous;
             }
@@ -6848,6 +6851,59 @@ static void prepareReflectionTypes(Backend *b) {
             reflectionInput(b, t->element);
     }
 }
+static void emitVarIntegerReflection(Backend *b) {
+    Scope scope = {.parent = b->globalScope};
+    b->scope = &scope;
+    b->body = tmpfile(); b->slots = tmpfile();
+    b->boxRegion = (Value){0}; b->terminated = 0;
+    DynamicArrayTemporary *mark = dynamicArrayTempMark(b);
+    Value input = value(b, SCALAR_ANY, "%%input"), tag = temp(b, RAW_POINTER);
+    fprintf(b->body, "  %s = extractvalue { ptr, i64 } %%input, 0\n", tag.operand);
+    for (AnyType *a = b->anyTypes; a; a = a->next) {
+        Kind representation = representationKind(b, a->kind);
+        unsigned width = parameterizedIntegerWidth(representation);
+        if (!a->reflectable || !width) continue;
+        Value matches = temp(b, BOOL);
+        fprintf(b->body, "  %s = icmp eq ptr %s, @__ocean.any.type.%u\n", matches.operand, tag.operand, (unsigned)a->kind);
+        unsigned matched = ++b->label, next = ++b->label;
+        branch(b, matches, matched, next); label(b, matched);
+        Value source = unboxMatched(b, input, a->kind);
+        unsigned bytes = (width + 7) / 8;
+        Value result = allocateCollection(b, stringKind(b), value(b, INT, "%u", bytes + 1));
+        Value data = arrayData(b, result), payload = temp(b, RAW_POINTER);
+        // Header encodes the number of bits in the last byte and whether it has a sign bit.
+        unsigned header = (width - 1) % 8 + 1 + (unsignedInteger(b, representation) ? 0 : 8);
+        fprintf(b->body, "  store i8 %u, ptr %s\n", header, data.operand);
+        fprintf(b->body, "  %s = getelementptr i8, ptr %s, i64 1\n", payload.operand, data.operand);
+        // The supported native and WebAssembly targets are little-endian.
+        if (width % 8) {
+            Value padded = temp(b, representation);
+            fprintf(b->body, "  %s = zext i%u %s to i%u\n", padded.operand, width, source.operand, bytes * 8);
+            source = padded;
+        }
+        fprintf(b->body, "  store i%u %s, ptr %s, align 1\n", bytes * 8, source.operand, payload.operand);
+        b->copyTransport = 1;
+        Value returned = copyValue(b, result, 0);
+        b->copyTransport = 0;
+        escapeDynamicArrays(b, returned);
+        cleanDynamicArrayTemps(b, mark);
+        fprintf(b->body, "  ret ptr %s\n", returned.operand);
+        b->terminated = 1;
+        label(b, next);
+    }
+    Value empty = allocateCollection(b, stringKind(b), value(b, INT, "0"));
+    b->copyTransport = 1;
+    Value returned = copyValue(b, empty, 0);
+    b->copyTransport = 0;
+    escapeDynamicArrays(b, returned);
+    cleanDynamicArrayTemps(b, mark);
+    fprintf(b->body, "  ret ptr %s\n", returned.operand);
+    fprintf(b->out, "define internal ptr @__ocean.reflect.var_integer({ ptr, i64 } %%input) {\nentry:\n");
+    if (copy(b->slots, b->out) || copy(b->body, b->out)) fail(b, "could not emit variable-width integer reflection");
+    fprintf(b->out, "}\n");
+    fclose(b->slots); fclose(b->body); clearScope(&scope);
+}
+
 static void emitReflection(Backend *b) {
     if (!b->reflectionUsed) return;
     FILE *previousBody = b->body, *previousSlots = b->slots;
@@ -6856,6 +6912,7 @@ static void emitReflection(Backend *b) {
     Value previousRegion = b->boxRegion;
     int previousTransport = b->copyTransport;
     b->function = NULL; b->copyTransport = 0;
+    if (b->reflectionVarIntegerUsed) emitVarIntegerReflection(b);
     if (b->reflectionFieldsKind) {
         BufferKind *array = bufferKind(b, b->reflectionFieldsKind);
         BufferKind *field = array ? bufferKind(b, array->element) : NULL;

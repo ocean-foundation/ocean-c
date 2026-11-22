@@ -938,6 +938,10 @@ field, and unit variants return no fields. The same deep-copy rules apply.
 to print enums recursively: `Event.Load`, `Event.Key(65)`, and
 `Event.Click(x: 2, y: 3)`. Fixed payloads print as `Number.One(1)`.
 
+`reflect.VarIntegerDecimal(value)` returns exact decimal text for boxed
+`varint(n)` and `varuint(n)` values, including named types, or an empty string
+for other types. The `io` print and format functions use it automatically.
+
 ## Native calls and current limits
 
 ```ocean

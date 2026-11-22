@@ -388,7 +388,8 @@ static void markReflectionIntrinsic(packageBuild *b, Package *p, File *file, str
     if (!standardPackageSource(b, p, file, "reflect")) return;
     int fields = !strcmp(f->name.lexeme, "Fields"), predicate = !strcmp(f->name.lexeme, "IsStruct"),
         isEnum = !strcmp(f->name.lexeme, "IsEnum"), variant = !strcmp(f->name.lexeme, "EnumVariant");
-    if (!fields && !predicate && !isEnum && !variant) return;
+    int integer = !strcmp(f->name.lexeme, "varIntegerBytes");
+    if (!fields && !predicate && !isEnum && !variant && !integer) return;
     typeTokens element;
     int valid = !f->isExtern && !f->isVariadic && !f->receiverType.nTokens && !f->nTypeParams &&
                 f->nParams == 1 && f->paramTypeNames[0].nTokens == 1 &&
@@ -398,10 +399,10 @@ static void markReflectionIntrinsic(packageBuild *b, Package *p, File *file, str
                 !strcmp(element.tokens[0].lexeme, "Field");
     if (valid && (predicate || isEnum))
         valid = f->resultTypes[0].nTokens == 1 && !strcmp(f->resultTypes[0].tokens[0].lexeme, "bool");
-    if (valid && variant)
+    if (valid && (variant || integer))
         valid = f->resultTypes[0].nTokens == 1 && !strcmp(f->resultTypes[0].tokens[0].lexeme, "string");
     if (!valid) { error(b, file->path, "invalid standard reflect intrinsic signature: %s", f->name.lexeme); return; }
-    f->compilerIntrinsic = fields ? INTRINSIC_REFLECT_FIELDS : isEnum ? INTRINSIC_REFLECT_IS_ENUM : variant ? INTRINSIC_REFLECT_ENUM_VARIANT : INTRINSIC_REFLECT_IS_STRUCT;
+    f->compilerIntrinsic = fields ? INTRINSIC_REFLECT_FIELDS : isEnum ? INTRINSIC_REFLECT_IS_ENUM : variant ? INTRINSIC_REFLECT_ENUM_VARIANT : integer ? INTRINSIC_REFLECT_VAR_INTEGER : INTRINSIC_REFLECT_IS_STRUCT;
 }
 static void markThreadIntrinsic(packageBuild *b, Package *p, File *file, struct stmt_func *f) {
     if (!standardPackageSource(b, p, file, "threads")) return;
