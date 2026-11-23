@@ -14,6 +14,7 @@
 #include <shellapi.h>
 #include <wchar.h>
 #else
+#include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -265,9 +266,22 @@ static int add_directory(posix_spawn_file_actions_t *actions, const char *direct
     return posix_spawn_file_actions_addchdir_np(actions, directory);
 #endif
 }
+/* A temporary file whose descriptor stays above stdin/stdout/stderr. */
+static FILE *temp_file(void) {
+    FILE *file = tmpfile();
+    if (!file) return NULL;
+    int fd = fileno(file);
+    if (fd > 2) return file;
+    int moved = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+    fclose(file);
+    if (moved < 0) return NULL;
+    file = fdopen(moved, "w+b");
+    if (!file) { close(moved); return NULL; }
+    return file;
+}
 /* A rewound temporary file holding input, for a child's standard input. */
 static FILE *input_file(const char *input, int64_t size) {
-    FILE *file = tmpfile();
+    FILE *file = temp_file();
     if (!file) return NULL;
     if ((size > 0 && fwrite(input, 1, (size_t)size, file) != (size_t)size) || fflush(file) || fseek(file, 0, SEEK_SET)) { fclose(file); return NULL; }
     return file;
@@ -277,10 +291,16 @@ static pid_t spawn(OceanProcess *p, FILE *input, FILE *capture) {
     posix_spawn_file_actions_t actions;
     if (posix_spawn_file_actions_init(&actions)) { fail(p, "exec: cannot initialize spawn actions"); return -1; }
     int failed = 0;
-    if (input) failed = posix_spawn_file_actions_adddup2(&actions, fileno(input), 0);
+    if (input) {
+        int fd = fileno(input);
+        failed = posix_spawn_file_actions_adddup2(&actions, fd, 0);
+        if (!failed && fd > 2) failed = posix_spawn_file_actions_addclose(&actions, fd);
+    }
     if (!failed && capture) {
-        failed = posix_spawn_file_actions_adddup2(&actions, fileno(capture), 1);
-        if (!failed && p->combined) failed = posix_spawn_file_actions_adddup2(&actions, fileno(capture), 2);
+        int fd = fileno(capture);
+        failed = posix_spawn_file_actions_adddup2(&actions, fd, 1);
+        if (!failed && p->combined) failed = posix_spawn_file_actions_adddup2(&actions, fd, 2);
+        if (!failed && fd > 2) failed = posix_spawn_file_actions_addclose(&actions, fd);
     }
     if (!failed && p->directory && *p->directory) failed = add_directory(&actions, p->directory);
 #ifdef __APPLE__
@@ -296,7 +316,7 @@ static pid_t spawn(OceanProcess *p, FILE *input, FILE *capture) {
 }
 int32_t ocean_process_run_input(OceanProcess *p, const char *input, int64_t input_size, int64_t has_input) {
     p->exit_code = -1; p->output = NULL; p->output_size = 0; p->error = NULL;
-    FILE *file = p->capture ? tmpfile() : NULL;
+    FILE *file = p->capture ? temp_file() : NULL;
     if (p->capture && !file) return fail(p, "exec: executable could not be started");
     FILE *stdin_file = has_input ? input_file(input, input_size) : NULL;
     if (has_input && !stdin_file) { if (file) fclose(file); return fail(p, "exec: cannot create input file"); }
